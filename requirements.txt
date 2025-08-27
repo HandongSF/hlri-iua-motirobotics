@@ -1,0 +1,15 @@
+# ----- Core (로봇 구동) -----
+numpy
+opencv-python          # (GUI 창 필요)  ← 만약 GUI 필요 없으면 opencv-python-headless 로 바꿔도 됨
+mediapipe
+dynamixel-sdk
+pynput
+
+# ----- PTT / 음성 / 환경설정 -----
+sounddevice            # 마이크 녹음
+google-generativeai    # Gemini API
+python-dotenv          # .env.local 로드
+requests               # Typecast 등 REST 호출
+
+# ----- Windows SAPI TTS용 COM -----
+pywin32; platform_system=="Windows"
