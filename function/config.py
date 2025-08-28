@@ -1,5 +1,25 @@
 # mk2/config.py
+# ------------------------------------------------------------
+# 💡 .env.local 설정 가이드 (OS별)
+#
+# [Windows 예시]
+#   DXL_PORT=COM3
+#   DXL_BAUD=57600
+#   DXL_PROTO=2.0
+#
+# [macOS 예시]
+#   # 실제 연결된 U2D2/USB-시리얼 포트명으로 교체하세요.
+#   # 터미널에서:  ls /dev/tty.*
+#   DXL_PORT=/dev/tty.usbmodem1103
+#   DXL_BAUD=57600
+#   DXL_PROTO=2.0
+#
+# ※ .env.local의 값이 있으면 항상 그것이 우선 적용됩니다.
+#    값이 없을 때만 OS별 기본값(Windows=COM3, macOS=/dev/tty.usbmodemXXXX)을 씁니다.
+# ------------------------------------------------------------
+
 import os
+import platform
 
 # ---- DXL Control Table ----
 ADDR_OPERATING_MODE   = 11
@@ -10,7 +30,10 @@ ADDR_PRESENT_POSITION = 132
 ADDR_GOAL_VELOCITY    = 104
 
 # ---- 기본 HW ----
-DEVICENAME       = os.getenv("DXL_PORT", "COM3")
+_IS_WINDOWS = (platform.system() == "Windows")
+_DEFAULT_PORT = "COM3" if _IS_WINDOWS else "/dev/tty.usbmodemXXXX"  # macOS 기본 템플릿(실제 포트명으로 .env에서 지정 권장)
+
+DEVICENAME       = os.getenv("DXL_PORT", _DEFAULT_PORT)
 BAUDRATE         = int(os.getenv("DXL_BAUD", "57600"))
 PROTOCOL_VERSION = float(os.getenv("DXL_PROTO", "2.0"))
 
