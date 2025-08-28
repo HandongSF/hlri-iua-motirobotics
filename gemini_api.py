@@ -3,11 +3,14 @@
 # 스페이스바 누르는 동안 녹음 → 떼면 전사 → Gemini 답변 생성 → 선택된 TTS로 읽기
 # (NEW) 키워드 콜백: "춤" → start_dance_cb(), "그만" → stop_dance_cb()
 # (NEW) TTS 규칙: '춤'이면 고정 멘트만 말하기, '그만'이면 말하지 않기
+# (NEW) 런처 시작 인사 + ESC 종료 인사
+# (NEW) LLM 의도 라우터: 부정/질문/제안 문맥을 구분해 dance/stop/chat 판단
 from __future__ import annotations
 
 import os
 import io
 import sys
+import json  # ### NEW: JSON 파싱
 import base64
 import queue
 import threading
@@ -61,17 +64,20 @@ DTYPE = _get_env("DTYPE", "int16")
 
 MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 
+# ### NEW: 전사 프롬프트 강화(숫자/날짜/지시 구분, 잡음 무시, 깔끔한 문장)
 PROMPT_TEXT = (
-    "다음 오디오를 한국어로 정확히 전사해줘. "
-    "사람의 목소리를 제외한 다른 소음은 무시해줘. "
-    "잡음처럼 느껴지는 것들은 무시해줘."
-    "문장부호와 띄어쓰기를 자연스럽게 해줘."
+    "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
+    " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
+    " (3) 종결어미·띄어쓰기·문장부호를 자연스럽게, (4) 기호나 철자가 헷갈리면 의미가 명확한 표현으로,"
+    " (5) '춤', '그만' 같은 지시어는 그대로 보존. 오직 텍스트만 출력."
 )
 
+# ### NEW: 공감형 답변 스타일을 더 명확히
 SYSTEM_INSTRUCTION = _get_env(
     "SYSTEM_INSTRUCTION",
-    "너는 사용자의 감정을 분석하고 공감해주는 친절한 감정 서비스 로봇이야. 너의 이름은 모티. 사용자 발화에 1~2문장으로 명확하게 답해. "
-    "사실이 불확실하면 추측하지 말고 추가 정보를 요청해."
+    "너는 공감 서비스 로봇 '모티'야. 한국어로 1~2문장, 따뜻하고 간결하게 답해."
+    " 사용자의 정서 신호(피곤, 스트레스, 불안)를 반영해 공감하고,"
+    " 사실이 불확실하면 짧게 확인 질문을 해. 과장·가스라이팅 금지."
 )
 
 # --- TTS 옵션 (SAPI용) ---
@@ -79,8 +85,20 @@ TTS_RATE = int(_get_env("TTS_RATE", "0"))          # SAPI: -10..10
 TTS_VOLUME = int(_get_env("TTS_VOLUME", "100"))    # SAPI: 0..100
 TTS_FORCE_VOICE_ID = _get_env("TTS_FORCE_VOICE_ID", "")
 TTS_OUTPUT_DEVICE = _get_env("TTS_OUTPUT_DEVICE", "")  # 출력 장치 이름(일부 포함 매칭)
-# --------------------------------------------------
 
+# ### NEW: 시작/종료 멘트(환경변수로 변경 가능)
+GREETING_TEXT = _get_env(
+    "GREETING_TEXT",
+    "안녕하세요. 사용자님! 저는 당신의 공감 서비스 로봇 모티에요! "
+    "오늘 하루 많이 힘드셨죠? 저와 이야기 나누고 싶으세요?"
+)
+FAREWELL_TEXT = _get_env(
+    "FAREWELL_TEXT",
+    "조금이라도 도움이 되었길 바라요. 저를 통해 잠시 쉬었다가는 시간이 되었길 바래요. 다시 힘내세요."
+)
+ENABLE_GREETING = _get_env("ENABLE_GREETING", "1") not in ("0", "false", "False")
+
+# --------------------------------------------------
 
 def _extract_text(resp) -> str:
     t = getattr(resp, "text", None)
@@ -105,13 +123,11 @@ def _extract_text(resp) -> str:
     except Exception:
         return ""
 
-
 @dataclass
 class RecorderState:
     recording: bool = False
     frames_q: queue.Queue = queue.Queue()
     stream: sd.InputStream | None = None
-
 
 # ======================= Windows SAPI 전용 워커 =======================
 class SapiTTSWorker:
@@ -156,12 +172,11 @@ class SapiTTSWorker:
                 self.ready.set()
                 return
 
-            # 지연 import (Windows에서만)
             import pythoncom as pc
             import win32com.client as w32
 
             pc.CoInitialize()
-            voice = w32.Dispatch("SAPI.SpVoice")  # SAPI.SpVoice
+            voice = w32.Dispatch("SAPI.SpVoice")
 
             # --- Voice 선택 ---
             voices = voice.GetVoices()
@@ -177,7 +192,7 @@ class SapiTTSWorker:
                     print(f"ℹ️ TTS_FORCE_VOICE_ID를 찾지 못했습니다: {TTS_FORCE_VOICE_ID}")
 
             if not chosen_voice_id:
-                # ko/korean/한국어 포함 우선
+                # ko/korean/한국어 우선
                 for i in range(voices.Count):
                     v = voices.Item(i)
                     blob = f"{v.Id} {v.GetDescription()}".lower()
@@ -219,7 +234,7 @@ class SapiTTSWorker:
 
             self.output_device_desc = chosen_out_desc
 
-            # --- 속도/볼륨 설정 ---
+            # --- 속도/볼륨 ---
             try:
                 voice.Rate = max(-10, min(10, TTS_RATE))
             except Exception:
@@ -229,7 +244,6 @@ class SapiTTSWorker:
             except Exception:
                 pass
 
-            # 참고 정보 출력
             print("🎧 사용 가능한 음성 목록 (SAPI):")
             for i in range(voices.Count):
                 v = voices.Item(i)
@@ -254,7 +268,7 @@ class SapiTTSWorker:
                     break
                 try:
                     print("🔈 TTS speaking...")
-                    voice.Speak(item)  # 동기 재생
+                    voice.Speak(item)  # 동기
                     print("✅ TTS done")
                 finally:
                     self._q.task_done()
@@ -268,7 +282,6 @@ class SapiTTSWorker:
                     pc.CoUninitialize()
             except Exception:
                 pass
-
 
 # ======================= Typecast 전용 워커 =======================
 class TypecastTTSWorker:
@@ -376,11 +389,12 @@ class TypecastTTSWorker:
             print(f"ℹ️ Typecast TTS 스레드 오류: {e}")
             self.ready.set()
 
-
+# ======================= 메인 앱 =======================
 class PressToTalk:
     def __init__(self,
                  start_dance_cb: Optional[Callable[[], None]] = None,
-                 stop_dance_cb: Optional[Callable[[], None]] = None):
+                 stop_dance_cb: Optional[Callable[[], None]] = None,
+                 greet_on_start: bool = True):  # ### NEW
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
             print("❗ GOOGLE_API_KEY가 없습니다.")
@@ -390,10 +404,31 @@ class PressToTalk:
 
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(MODEL_NAME)
+
+        # 대화용(공감)
         self.chat = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=SYSTEM_INSTRUCTION
         ).start_chat(history=[])
+
+        # ### NEW: 의도 라우터(엄격 JSON)
+        self.router_model = genai.GenerativeModel(
+            MODEL_NAME,
+            system_instruction=(
+                "너는 명령 라우터다. 한국어 문장을 보고 의도를 분류한다. "
+                "dance=사용자가 실제로 춤을 '시작하라고' 명령/요청/승인. "
+                "stop=춤을 '멈추라'는 명령/요청/승인. "
+                "chat=일반 대화(질문/잡담/설명/감정표현/춤에 대한 견해·가정적 질문 포함). "
+                "부정/금지/거절 표현(예:'춤 추지 마','춤은 안돼','그만두지 말고 계속')은 정확히 반영하라. "
+                "오직 아래 JSON만 출력:\n"
+                '{ "intent": "dance|stop|chat", "normalized_text": "<의미만 보존한 간결한 문장>", '
+                '"speakable_reply": "<의도가 chat일 때 1~2문장 공감형 짧은 답변. dance/stop이면 빈 문자열>" }'
+            ),
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.2
+            }
+        )
 
         # --- 키워드 콜백 저장 ---
         self.start_dance_cb = start_dance_cb
@@ -416,11 +451,15 @@ class PressToTalk:
         self.listener = None
         self._print_intro()
 
+        # ### NEW: 시작 인사(런처 실행 시)
+        if greet_on_start and ENABLE_GREETING:
+            self.tts.speak(GREETING_TEXT)
+
     def _print_intro(self):
         print("\n=== Gemini Press-to-Transcribe + Chat + TTS (Windows/macOS) ===")
         print("▶ 스페이스바 누르는 동안 녹음 → 떼면 전사 + 답변 생성 + 음성 재생")
         print("▶ [User ] 전사 결과 / [Gemini] 모델 답변")
-        print("▶ ESC 로 종료 (답변 읽기 완료 후 종료)")
+        print("▶ ESC 로 종료 (종료 멘트 재생 후 종료)")
         print("▶ 키워드: '춤' → 5번 모터 댄스 시작 / '그만' → 댄스 정지·원위치")
         print(f"▶ MODEL={MODEL_NAME}, SR={SAMPLE_RATE}Hz, CH={CHANNELS}, DTYPE={DTYPE}")
         v_id = getattr(self.tts, "voice_id", None)
@@ -522,33 +561,41 @@ class PressToTalk:
                 wf.writeframes(audio_np.tobytes())
             return buf.getvalue()
 
-    # ----------- 사용자 키워드 처리(=TTS 정책 포함) -----------
-    def _handle_user_keywords(self, text: str) -> str | None:
+    # ----------- LLM 의도 라우팅 -----------  ### NEW
+    def _route_intent(self, text: str) -> dict:
         """
-        반환값:
-          - 'dance' : 춤 시작(고정 멘트 TTS)
-          - 'stop'  : 그만(아무 말도 안함)
-          - None    : 키워드 없음
-        우선순위: '그만' > '춤'
+        반환 예:
+        { "intent":"dance|stop|chat", "normalized_text":"...", "speakable_reply":"..." }
+        실패 시 chat 기본값으로 폴백.
         """
-        if not text:
-            return None
-        if "그만" in text:
-            print("💡 키워드 감지: '그만' → DANCE STOP 요청")
-            if callable(self.stop_dance_cb):
-                try: self.stop_dance_cb()
-                except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
-            return "stop"
-        if "춤" in text:
-            print("💡 키워드 감지: '춤' → DANCE START 요청")
-            if callable(self.start_dance_cb):
-                try: self.start_dance_cb()
-                except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
-            return "dance"
-        return None
+        try:
+            resp = self.router_model.generate_content(text)
+            raw = _extract_text(resp)
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("router JSON is not a dict")
+            intent = data.get("intent", "chat")
+            if intent not in ("dance", "stop", "chat"):
+                intent = "chat"
+            return {
+                "intent": intent,
+                "normalized_text": str(data.get("normalized_text", text)),
+                "speakable_reply": str(data.get("speakable_reply", "")) if intent == "chat" else ""
+            }
+        except Exception as e:
+            # 폴백: 단순 규칙
+            print(f"(router 폴백) {e}")
+            low = text.lower()
+            if any(neg in text for neg in ["하지 마", "하지마", "안돼", "안 돼", "그만두지 마", "멈추지 마"]):
+                return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
+            if "그만" in text:
+                return {"intent": "stop", "normalized_text": text, "speakable_reply": ""}
+            if "춤" in text:
+                return {"intent": "dance", "normalized_text": text, "speakable_reply": ""}
+            return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
 
     def _transcribe_then_chat(self, wav_bytes: bytes):
-        """오디오 → 전사 → 모델 답변 생성 → (규칙에 따라) TTS 재생"""
+        """오디오 → 전사 → (의도 라우팅) → 모델 답변 생성 → (규칙에 따라) TTS 재생"""
         try:
             b64 = base64.b64encode(wav_bytes).decode("ascii")
             parts = [
@@ -564,26 +611,46 @@ class PressToTalk:
             ts = datetime.now().strftime("%H:%M:%S")
             print(f"[{ts}] [User ] {user_text}")
 
-            # 사용자 발화에서 키워드 처리 (TTS 정책 포함)
-            action = self._handle_user_keywords(user_text)
+            # ### NEW: LLM 의도 판별
+            route = self._route_intent(user_text)
+            intent = route["intent"]
 
-            # 모델 응답은 항상 생성(로그/콘솔용)하되,
-            # TTS는 action 규칙에 따라 선택/대체/무음 처리
-            reply = self.chat.send_message(user_text)
-            model_text = _extract_text(reply) or ""
+            # (로그용) 대화 생성은 항상 해두되, TTS는 규칙에 따라 선택
+            model_text = ""
+            speak_text = ""
+
+            if intent == "chat":
+                # 사용자가 말한 의미를 반영해 공감형 답변
+                # 우선 라우터가 만든 짧은 답변을 사용, 없으면 chat 모델로 생성
+                if route.get("speakable_reply"):
+                    model_text = route["speakable_reply"]
+                else:
+                    reply = self.chat.send_message(user_text)
+                    model_text = _extract_text(reply) or ""
+                speak_text = model_text
+
+            elif intent == "dance":
+                # 콜백 실행 + 고정 멘트만 말하기
+                print("💡 의도: DANCE START")
+                if callable(self.start_dance_cb):
+                    try: self.start_dance_cb()
+                    except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
+                model_text = "네! 모티가 춤을 춰볼게요"
+                speak_text = "네! 모티가 춤을 춰볼게요"
+
+            elif intent == "stop":
+                # 콜백 실행 + 아무 말도 하지 않기
+                print("💡 의도: DANCE STOP")
+                if callable(self.stop_dance_cb):
+                    try: self.stop_dance_cb()
+                    except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
+                model_text = "(춤 정지 명령 처리)"
+
             print(f"[{ts}] [Gemini] {model_text}\n")
 
-            # ====== TTS 규칙 ======
-            if action == "dance":
-                # 생성 응답 대신 고정 멘트만 말하기
-                self.tts.speak("네! 모티가 춤을 춰볼게요")
-            elif action == "stop":
-                # 아무 말도 하지 않음
-                pass
-            else:
-                # 평소처럼 모델 응답 말하기
-                if model_text:
-                    self.tts.speak(model_text)
+            # ====== TTS 재생 ======
+            if speak_text:
+                self.tts.speak(speak_text)
 
         except Exception as e:
             print(f"❌ 처리 실패: {e}\n")
@@ -601,8 +668,13 @@ class PressToTalk:
             if key == keyboard.Key.space:
                 self._stop_recording_and_transcribe()
             elif key == keyboard.Key.esc:
-                print("종료합니다. 👋  (답변 읽기 완료까지 잠시만요)")
-                self.tts.close_and_join(drain=True)
+                # ### NEW: 종료 멘트 후 안전 종료
+                print("종료합니다. 👋  (종료 멘트 재생 후 종료)")
+                try:
+                    if FAREWELL_TEXT:
+                        self.tts.speak(FAREWELL_TEXT)
+                finally:
+                    self.tts.close_and_join(drain=True)
                 return False
         except Exception as e:
             print(f"[키 처리 오류 on_release] {e}", file=sys.stderr)
@@ -611,7 +683,7 @@ class PressToTalk:
         with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as self.listener:
             self.listener.join()
 
-
+# ======================= 엔트리포인트 =======================
 if __name__ == "__main__":
     try:
         default_in = sd.default.device[0]
@@ -621,5 +693,6 @@ if __name__ == "__main__":
     except Exception:
         pass
 
-    app = PressToTalk()
+    # ### NEW: 런처 실행 시 시작 인사 활성화
+    app = PressToTalk(greet_on_start=True)
     app.run()
