@@ -1,8 +1,9 @@
-# gemini_v2.py
-# Windows + Python 3.11.6
+# gemini_api.py
+# Windows/macOS + Python 3.11
 # 스페이스바 누르는 동안 녹음 → 떼면 전사 → Gemini 답변 생성 → 선택된 TTS로 읽기
 # (NEW) 키워드 콜백: "춤" → start_dance_cb(), "그만" → stop_dance_cb()
 # (NEW) TTS 규칙: '춤'이면 고정 멘트만 말하기, '그만'이면 말하지 않기
+from __future__ import annotations
 
 import os
 import io
@@ -11,6 +12,7 @@ import base64
 import queue
 import threading
 import wave
+import platform
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable
@@ -31,9 +33,7 @@ from pynput import keyboard
 import google.generativeai as genai
 import requests  # <-- Typecast REST
 
-# ---- Windows SAPI COM (직접) ----
-import pythoncom
-import win32com.client
+IS_WINDOWS = (platform.system() == "Windows")
 
 # ---------------------- 설정 ----------------------
 def _get_env(name: str, default: str | None = None) -> str | None:
@@ -113,6 +113,7 @@ class RecorderState:
     stream: sd.InputStream | None = None
 
 
+# ======================= Windows SAPI 전용 워커 =======================
 class SapiTTSWorker:
     """
     Windows SAPI를 전용 스레드에서 직접 사용.
@@ -147,9 +148,21 @@ class SapiTTSWorker:
             pass
 
     def _run(self):
+        pc = None
+        w32 = None
         try:
-            pythoncom.CoInitialize()
-            voice = win32com.client.Dispatch("SAPI.SpVoice")  # SAPI.SpVoice
+            if not IS_WINDOWS:
+                print("ℹ️ SAPI는 Windows 전용입니다. (macOS에서는 비활성)")
+                self.ready.set()
+                return
+
+            # 지연 import (Windows에서만)
+            import pythoncom as pc
+            import win32com.client as w32
+
+            pc.CoInitialize()
+            voice = w32.Dispatch("SAPI.SpVoice")  # SAPI.SpVoice
+
             # --- Voice 선택 ---
             voices = voice.GetVoices()
             chosen_voice_id = None
@@ -175,7 +188,6 @@ class SapiTTSWorker:
                     chosen_voice_id = voices.Item(0).Id
 
             if chosen_voice_id:
-                # Set by token
                 for i in range(voices.Count):
                     v = voices.Item(i)
                     if v.Id == chosen_voice_id:
@@ -242,8 +254,7 @@ class SapiTTSWorker:
                     break
                 try:
                     print("🔈 TTS speaking...")
-                    # 동기 재생
-                    voice.Speak(item)
+                    voice.Speak(item)  # 동기 재생
                     print("✅ TTS done")
                 finally:
                     self._q.task_done()
@@ -253,7 +264,8 @@ class SapiTTSWorker:
             self.ready.set()
         finally:
             try:
-                pythoncom.CoUninitialize()
+                if pc is not None:
+                    pc.CoUninitialize()
             except Exception:
                 pass
 
@@ -388,7 +400,12 @@ class PressToTalk:
         self.stop_dance_cb  = stop_dance_cb
 
         # --- TTS 엔진 선택 ---
-        engine = _get_env("TTS_ENGINE", "sapi").lower()
+        default_engine = "sapi" if IS_WINDOWS else "typecast"
+        engine = _get_env("TTS_ENGINE", default_engine).lower()
+        if engine == "sapi" and not IS_WINDOWS:
+            print("ℹ️ macOS에서는 SAPI를 사용할 수 없어 Typecast로 전환합니다.")
+            engine = "typecast"
+
         if engine == "typecast":
             self.tts = TypecastTTSWorker()
         else:
@@ -400,7 +417,7 @@ class PressToTalk:
         self._print_intro()
 
     def _print_intro(self):
-        print("\n=== Gemini Press-to-Transcribe + Chat + TTS (Windows, Python 3.11) ===")
+        print("\n=== Gemini Press-to-Transcribe + Chat + TTS (Windows/macOS) ===")
         print("▶ 스페이스바 누르는 동안 녹음 → 떼면 전사 + 답변 생성 + 음성 재생")
         print("▶ [User ] 전사 결과 / [Gemini] 모델 답변")
         print("▶ ESC 로 종료 (답변 읽기 완료 후 종료)")
