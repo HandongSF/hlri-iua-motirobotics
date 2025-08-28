@@ -1,21 +1,20 @@
 # launcher.py
 # ONE-PORT orchestrator: FaceTrack + Wheels + Gemini PTT + Dance
-# - macOS 기본 CAM_INDEX=0, Windows 기본 CAM_INDEX=1 (env로 덮어쓰기 가능)
-# - 포트 한 번만 열고 모든 모듈에서 공유
+# - macOS: OpenCV 창은 "메인 스레드"에서만 실행 (function.face.display_loop_main_thread)
+# - Windows/Linux: 기존처럼 워커 스레드에서 imshow 가능
 # - 안전 종료: ESC / Ctrl+C / '그만' → 댄스 정지·원위치, 휠 0, 토크 OFF, 포트 닫기
 
 from __future__ import annotations
 
 import os
 import sys
-import time
 import signal
 import threading
 import platform
 
 from dynamixel_sdk import PortHandler, PacketHandler
 
-# function 패키지
+# function 패키지에서 모듈 가져오기
 from function import config as C
 from function import init as I
 from function import face as F
@@ -55,7 +54,7 @@ def _open_port() -> tuple[PortHandler, PacketHandler]:
 
 
 def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threading.Lock):
-    """댄스 정지 → 휠 0/토크 OFF → 팬/틸트 및 보조 포지션 토크 OFF → 포트 닫기"""
+    """댄스 정지 → 휠 0/토크 OFF → 포트 닫기"""
     try:
         # 댄스 중이면 정지·원위치
         try:
@@ -133,7 +132,7 @@ def main():
 
     # ---- Dance callbacks (PTT에서 호출) ----
     start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
-    stop_dance = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
+    stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
 
     # ---- PTT thread ----
     t_ptt = threading.Thread(
@@ -141,9 +140,29 @@ def main():
     )
     t_ptt.start()
 
-    # ---- Wheel loop (메인 루프) ----
+    # ---- Wheel + GUI 실행 ----
     try:
-        W.wheel_loop(port, pkt, dxl_lock, stop_event)
+        if platform.system() == "Darwin":
+            # macOS: 메인 스레드에서 OpenCV 창을 돌려야 함
+            t_wheel = threading.Thread(
+                target=W.wheel_loop, args=(port, pkt, dxl_lock, stop_event),
+                name="wheel", daemon=True
+            )
+            t_wheel.start()
+
+            # 메인 스레드에서 GUI 루프 실행 (ESC로 stop_event 세팅)
+            # 👉 function/face.py에 display_loop_main_thread가 포함되어 있어야 합니다.
+            F.display_loop_main_thread(stop_event)
+
+            # GUI 루프가 끝나면(ESC/종료) 휠 쓰레드 정리
+            try:
+                t_wheel.join(timeout=2.0)
+            except Exception:
+                pass
+        else:
+            # 기존과 동일: 메인에서 wheel_loop 실행
+            W.wheel_loop(port, pkt, dxl_lock, stop_event)
+
     except KeyboardInterrupt:
         stop_event.set()
     finally:
