@@ -1,5 +1,31 @@
-# env files (track 금지)
+# --- Python bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- 가상환경/패키지 캐시 ---
+.venv/
+venv/
+ENV/
+.conda/
+__pypackages__/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- OS 잡파일 ---
+.DS_Store
+Thumbs.db
+
+# --- IDE ---
+.vscode/
+.idea/
+
+# --- 로그/생성물 ---
+logs/*
+!logs/.gitkeep
+
+# --- 비밀키/로컬 설정 ---
 .env.local
-**/.env.local
-# 예시는 허용(이건 팀원이 참고용으로 커밋)
 !.env.example
