@@ -47,3 +47,8 @@ requests
 
 # ----- Windows SAPI TTS용 COM (Windows에서만 설치됨) -----
 pywin32; platform_system=="Windows"
+
+# ----- Moti-Face 추가 의존성 -----
+pygame
+pvporcupine
+Pyaudion 
