@@ -11,7 +11,8 @@ import queue
 import threading
 import wave
 import platform
-import random  # 추가
+import random
+import time  # 추가
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable
@@ -53,7 +54,7 @@ def _find_input_device_by_name(name_substr: str) -> int | None:
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-1.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 PROMPT_TEXT = (
     "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
     " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
@@ -274,6 +275,11 @@ class PressToTalk:
         self.emotion_queue = emotion_queue
         self.hotword_queue = hotword_queue
         self.stop_event = stop_event or threading.Event()
+        
+        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+        self.last_activity_time = 0
+        self.current_listener = None
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
@@ -402,7 +408,7 @@ class PressToTalk:
                     except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
                 
                 if self.emotion_queue:
-                    chosen_emotion = random.choice(["EXCITED", "TENDER"])
+                    chosen_emotion = random.choice(["EXCITED"])
                     self.emotion_queue.put(chosen_emotion)
                     print(f"💃 춤 시작! 표정을 {chosen_emotion}로 변경합니다.")
 
@@ -436,13 +442,20 @@ class PressToTalk:
     def _on_release(self, key):
         if self.stop_event.is_set(): return False
         try:
-            if key == keyboard.Key.space: self._stop_recording_and_transcribe()
+            if key == keyboard.Key.space:
+                # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+                self.last_activity_time = time.time()
+                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+                self._stop_recording_and_transcribe()
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
+                if self.current_listener and self.current_listener.is_alive():
+                    self.current_listener.stop()
                 self.stop_event.set()
-                return False # 리스너 종료
+                return False 
         except Exception as e: print(f"[키 처리 오류 on_release] {e}", file=sys.stderr)
 
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     def run(self):
         while not self.stop_event.is_set():
             print("▶ '안녕 모티' 호출(SLEEPY 상태에서)을 기다립니다... (종료: ESC)")
@@ -450,15 +463,25 @@ class PressToTalk:
                 signal = self.hotword_queue.get(timeout=1.0)
                 
                 if signal == "hotword_detected" and not self.stop_event.is_set():
-                    print("💡 핫워드 감지! 대화 모드를 시작합니다.")
+                    print("💡 핫워드 감지! 대화 세션을 시작합니다.")
                     if self.emotion_queue: self.emotion_queue.put("WAKE")
                     self.tts.speak("네, 말씀하세요.")
                     
-                    with keyboard.Listener(on_press=self._on_press, on_release=self._on_release) as listener:
-                        listener.join()
+                    self.last_activity_time = time.time()
+                    self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+                    self.current_listener.start()
                     
-                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                    print("▶ 대화 모드 종료. 다시 핫워드 대기 상태로 전환합니다.")
+                    # 25초(wake 3초 + neutral 20초 + 여유 2초) 동안 대기
+                    while time.time() - self.last_activity_time < 25:
+                        if self.stop_event.is_set():
+                            break
+                        time.sleep(0.1)
+
+                    if self.current_listener.is_alive():
+                        self.current_listener.stop()
+                    
+                    if not self.stop_event.is_set():
+                         print("▶ 대화 세션 시간 초과. 다시 핫워드 대기 상태로 전환합니다.")
 
             except queue.Empty:
                 continue
@@ -467,8 +490,11 @@ class PressToTalk:
                 break
         
         print("PTT App 종료 절차 시작...")
+        if self.current_listener and self.current_listener.is_alive():
+            self.current_listener.stop()
         try:
             if FAREWELL_TEXT: self.tts.speak(FAREWELL_TEXT)
         finally:
             self.tts.close_and_join(drain=True)
         print("PTT App 정상 종료")
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲

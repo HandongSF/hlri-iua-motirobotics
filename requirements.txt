@@ -52,3 +52,6 @@ pywin32; platform_system=="Windows"
 pygame
 pvporcupine
 Pyaudion 
+
+# ----- serial port 탐색 -----
+pyserial
