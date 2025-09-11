@@ -30,7 +30,7 @@ import threading
 import wave
 import platform
 import random
-import time  # 추가
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable
@@ -74,7 +74,7 @@ def _find_input_device_by_name(name_substr: str) -> int | None:
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-1.5-flash")
 PROMPT_TEXT = (
     "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
     " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
@@ -103,20 +103,16 @@ def _extract_text(resp) -> str:
         pieces = []
         for c in getattr(resp, "candidates", []) or []:
             content = getattr(c, "content", None)
-            if not content:
-                continue
+            if not content: continue
             for p in getattr(content, "parts", []) or []:
                 pt = getattr(p, "text", None)
                 if pt and str(pt).strip():
                     pieces.append(str(pt).strip())
         if pieces:
             return "\n".join(pieces).strip()
-    except Exception:
-        pass
-    try:
-        return str(resp).strip()
-    except Exception:
-        return ""
+    except Exception: pass
+    try: return str(resp).strip()
+    except Exception: return ""
 
 @dataclass
 class RecorderState:
@@ -260,16 +256,19 @@ class TypecastTTSWorker:
                 finally: self._q.task_done()
         except Exception as e: print(f"ℹ️ Typecast TTS 스레드 오류: {e}"); self.ready.set()
 
-
 class PressToTalk:
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 1. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # __init__ 생성자에 play_rps_motion_cb를 추가합니다.
     def __init__(self,
                  start_dance_cb: Optional[Callable[[], None]] = None,
                  stop_dance_cb: Optional[Callable[[], None]] = None,
+                 play_rps_motion_cb: Optional[Callable[[], None]] = None,
                  emotion_queue: Optional[queue.Queue] = None,
                  hotword_queue: Optional[queue.Queue] = None,
                  stop_event: Optional[threading.Event] = None,
-                rps_command_q: Optional[multiprocessing.Queue] = None,
+                 rps_command_q: Optional[multiprocessing.Queue] = None,
                  rps_result_q: Optional[multiprocessing.Queue] = None):
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
             print("❗ GOOGLE_API_KEY가 없습니다."); sys.exit(1)
@@ -295,14 +294,16 @@ class PressToTalk:
         
         self.start_dance_cb = start_dance_cb
         self.stop_dance_cb  = stop_dance_cb
+        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 2. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+        # 전달받은 콜백 함수를 클래스 멤버 변수로 저장합니다.
+        self.play_rps_motion_cb = play_rps_motion_cb
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         self.emotion_queue = emotion_queue
         self.hotword_queue = hotword_queue
         self.stop_event = stop_event or threading.Event()
         
-        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
         self.last_activity_time = 0
         self.current_listener = None
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
         self.rps_command_q = rps_command_q
         self.rps_result_q  = rps_result_q
@@ -397,12 +398,12 @@ class PressToTalk:
             if any(neg in text for neg in ["하지 마", "하지마", "안돼", "안 돼", "그만두지 마", "멈추지 마"]): return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
             if "그만" in text: return {"intent": "stop", "normalized_text": text, "speakable_reply": ""}
             if "춤" in text: return {"intent": "dance", "normalized_text": text, "speakable_reply": ""}
+            if any(w in low for w in ["가위바위보", "게임"]): return {"intent": "game", "normalized_text": text, "speakable_reply": ""}
             return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
     
     def _analyze_and_send_emotion(self, text: str):
         if not self.emotion_queue or not text: return
         low_text = text.lower()
-        if any(w in low_text for w in ["가위바위보", "게임"]): return {"intent": "game", "normalized_text": text, "speakable_reply": ""}
         if any(w in low_text for w in ["신나", "재밌", "좋아", "행복", "최고"]): self.emotion_queue.put("HAPPY")
         elif any(w in low_text for w in ["놀라운", "놀랐", "깜짝", "세상에"]): self.emotion_queue.put("SURPRISED")
         elif any(w in low_text for w in ["슬퍼", "우울", "힘들", "속상"]): self.emotion_queue.put("SAD")
@@ -447,24 +448,53 @@ class PressToTalk:
                     try: self.stop_dance_cb()
                     except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
                 
-                if self.emotion_queue:
-                    self.emotion_queue.put("NEUTRAL")
-
+                if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
                 model_text = "(춤 정지 명령 처리)"
 
             elif intent == "game":
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
-                self.tts.speak("네, 좋아요! 제가 가위바위보를 낼게요. 당신의 손동작을 보여주세요.")
-                time.sleep(1)
-                self.tts.speak("가위! 바위! 보!")
-                time.sleep(2)
 
-                game_result = "제스처를 인식하지 못했어요. 다음에 다시 해볼까요?"
+                # 1. 게임 시작 시 SLEEPY 타이머를 리셋하도록 신호를 보냅니다.
+                if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
+
+                # 2. (백그라운드) 제스처 인식 스레드에 게임 시작 신호를 미리 보냅니다.
+                self.rps_command_q.put("START_GAME")
                 
+                # 3. 사용자에게 게임 방법을 안내합니다.
+                self.tts.speak("네, 좋아요! 제가 가위바위보를 낼게요. 당신의 손동작을 보여주세요.")
+                
+                # 4. 사용자가 손을 준비할 시간을 줍니다.
+                time.sleep(3) 
 
+                # 5. "가위! 바위! 보!" 음성과 팔 동작을 동시에 시작합니다.
+                if callable(self.play_rps_motion_cb):
+                    threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
+                self.tts.speak("가위! 바위! 보!")
+
+                # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+                # 6. 게임 결과를 기다리는 동안 주기적으로 SLEEPY 타이머를 리셋합니다.
+                game_result = "제스처를 인식하지 못했어요. 다음에 다시 해볼까요?"
                 try:
-                    self.rps_command_q.put("START_GAME")
+                    # 타이머 리셋을 위한 스레드 이벤트
+                    reset_timer_stop_event = threading.Event()
+
+                    def timer_reset_worker():
+                        """10초마다 타이머 리셋 신호를 보내는 스레드 함수"""
+                        while not reset_timer_stop_event.wait(10): # 10초 대기
+                            print("⏳ (게임 중) SLEEPY 타이머 리셋")
+                            if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
+                    
+                    # 타이머 리셋 스레드 시작
+                    reset_thread = threading.Thread(target=timer_reset_worker, daemon=True)
+                    reset_thread.start()
+
+                    # 결과를 기다립니다 (최대 20초).
                     game_result = self.rps_result_q.get(timeout=20)
+                    
+                    # 결과가 도착하면 타이머 리셋 스레드를 중지시킵니다.
+                    reset_timer_stop_event.set()
+                    reset_thread.join(timeout=1.0)
+                    
                     print(f"게임 결과: {game_result}")
                     self.tts.speak(game_result)
 
@@ -477,6 +507,7 @@ class PressToTalk:
                 
                 model_text = f"게임 결과: {game_result}"
                 if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 
             print(f"[{ts}] [Gemini] {model_text}\n")
@@ -497,9 +528,7 @@ class PressToTalk:
         if self.stop_event.is_set(): return False
         try:
             if key == keyboard.Key.space:
-                # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
                 self.last_activity_time = time.time()
-                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
                 self._stop_recording_and_transcribe()
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
@@ -509,7 +538,6 @@ class PressToTalk:
                 return False 
         except Exception as e: print(f"[키 처리 오류 on_release] {e}", file=sys.stderr)
 
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
     def run(self):
         while not self.stop_event.is_set():
             print("▶ '안녕 모티' 호출(SLEEPY 상태에서)을 기다립니다... (종료: ESC)")
@@ -525,10 +553,8 @@ class PressToTalk:
                     self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
                     self.current_listener.start()
                     
-                    # 40초(wake 3초 + neutral 20초 + 여유 2초) 동안 대기
                     while time.time() - self.last_activity_time < 40:
-                        if self.stop_event.is_set():
-                            break
+                        if self.stop_event.is_set(): break
                         time.sleep(0.1)
 
                     if self.current_listener.is_alive():
@@ -536,7 +562,6 @@ class PressToTalk:
                     
                     if not self.stop_event.is_set():
                          print("▶ 대화 세션 시간 초과. 다시 핫워드 대기 상태로 전환합니다.")
-
             except queue.Empty:
                 continue
             except (KeyboardInterrupt, SystemExit):
@@ -551,4 +576,3 @@ class PressToTalk:
         finally:
             self.tts.close_and_join(drain=True)
         print("PTT App 정상 종료")
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
