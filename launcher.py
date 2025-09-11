@@ -28,10 +28,10 @@ import signal
 import threading
 import platform
 import queue
+import multiprocessing # multiprocessing 큐를 사용하기 위해 import
 
 from dynamixel_sdk import PortHandler, PacketHandler
 
-# function 패키지에서 모듈을 올바르게 가져오도록 수정
 from function import config as C
 from function import init as I
 from function import face as F
@@ -39,24 +39,16 @@ from function import wheel as W
 from function import dance as D
 from function import dxl_io as IO
 
-# PTT (Space=녹음, ESC=종료, "춤"/"그만" 콜백)
 from gemini_api import PressToTalk
-
-# 통합된 display 앱을 실행하기 위한 함수 import
 from display.main import run_face_app
-
-from function.face import face_tracker_worker
 from function.rock_paper import rock_paper_game_worker
 
 def _get_env(name: str, default: str) -> str:
     v = os.environ.get(name)
     return default if v is None or not str(v).strip() else str(v).strip()
 
-
 def _default_cam_index() -> int:
-    # macOS는 내장 카메라가 0번일 가능성이 높음
     return 0 if platform.system() == "Darwin" else 1
-
 
 def _open_port() -> tuple[PortHandler, PacketHandler]:
     port = PortHandler(C.DEVICENAME)
@@ -67,60 +59,51 @@ def _open_port() -> tuple[PortHandler, PacketHandler]:
         sys.exit(1)
     if not port.setBaudRate(C.BAUDRATE):
         print(f"❌ Baudrate 설정 실패: {C.BAUDRATE}")
-        try:
-            port.closePort()
-        finally:
-            sys.exit(1)
+        try: port.closePort()
+        finally: sys.exit(1)
     print(f"▶ 포트 열림: {C.DEVICENAME}, Baud={C.BAUDRATE}, Proto={C.PROTOCOL_VERSION}")
     return port, pkt
 
-
 def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threading.Lock):
-    """댄스 정지 → 휠 0/토크 OFF → 포트 닫기"""
     print("▶ 시스템 종료 절차 시작...")
-    try:
-        D.stop_dance(port, pkt, dxl_lock, return_home=True)
-    except Exception as e:
-        print(f"  - 댄스 정지 중 오류: {e}")
-    try:
-        I.stop_all_wheels(pkt, port, dxl_lock)
-    except Exception as e:
-        print(f"  - 휠 정지 중 오류: {e}")
+    try: D.stop_dance(port, pkt, dxl_lock, return_home=True)
+    except Exception as e: print(f"  - 댄스 정지 중 오류: {e}")
+    try: I.stop_all_wheels(pkt, port, dxl_lock)
+    except Exception as e: print(f"  - 휠 정지 중 오류: {e}")
     try:
         with dxl_lock:
+            # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 2. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+            # 종료 시 RPS_ARM_ID 모터도 토크를 끄도록 ID 목록에 추가합니다.
             ids = (C.PAN_ID, C.TILT_ID, *C.EXTRA_POS_IDS)
-            for i in ids:
-                IO.write1(pkt, port, i, C.ADDR_TORQUE_ENABLE, 0)
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            for i in ids: IO.write1(pkt, port, i, C.ADDR_TORQUE_ENABLE, 0)
         print("  - 모든 모터 토크 OFF 완료")
-    except Exception as e:
-        print(f"  - 모터 토크 해제 중 오류: {e}")
+    except Exception as e: print(f"  - 모터 토크 해제 중 오류: {e}")
     finally:
         try:
             port.closePort()
             print("■ 종료: 포트 닫힘")
-        except Exception as e:
-            print(f"  - 포트 닫기 중 오류: {e}")
+        except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-
-def run_ptt(start_dance_cb, stop_dance_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q):
+# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 3. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+# PTT 스레드 실행 함수에 play_rps_motion_cb 인자를 추가합니다.
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
             start_dance_cb=start_dance_cb,
             stop_dance_cb=stop_dance_cb,
+            play_rps_motion_cb=play_rps_motion_cb, # 새로 추가된 콜백 전달
             emotion_queue=emotion_queue,
             hotword_queue=hotword_queue,
             stop_event=stop_event,
             rps_command_q=rps_command_q,
             rps_result_q=rps_result_q
-                # stop_event 전달
         )
         app.run()
-    except Exception as e:
-        print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
-    finally:
-        print("■ PTT 스레드 종료")
-
+    except Exception as e: print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
+    finally: print("■ PTT 스레드 종료")
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 def main():
     print("▶ launcher: (통합 버전) FaceTrack + Wheels + PTT + Dance + Visual Face")
@@ -128,13 +111,14 @@ def main():
 
     port, pkt = _open_port()
     dxl_lock = threading.Lock()
-    stop_event = threading.Event() # <<< 모든 스레드가 공유할 종료 신호
+    stop_event = threading.Event()
 
     emotion_queue = queue.Queue()
     hotword_queue = queue.Queue()
-
-    rps_command_q = queue.Queue()
-    rps_result_q = queue.Queue()
+    
+    # multiprocessing.Queue 사용
+    rps_command_q = multiprocessing.Queue()
+    rps_result_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
     
     def _handle_sigint(sig, frame):
@@ -158,35 +142,31 @@ def main():
         target=F.face_tracker_worker,
         args=(port, pkt, dxl_lock, stop_event, video_frame_q),
         kwargs=dict(camera_index=cam_index, draw_mesh=False, print_debug=True),
-        name="face",
-        daemon=True,
-    )
+        name="face", daemon=True)
 
     t_visual_face = threading.Thread(
         target=run_face_app,
         args=(emotion_queue, hotword_queue, stop_event),
-        name="visual_face",
-        daemon=True,
-    )
-
+        name="visual_face", daemon=True)
+    
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 4. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    # 각 동작 함수를 lambda로 정의하여 PressToTalk 클래스에 전달합니다.
     start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
-
+    play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock) # 새로 추가된 동작 함수
+    
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q),
-        name="ptt",
-        daemon=True,
-    )
+        # run_ptt 함수에 새로 추가한 play_rps_motion을 전달합니다.
+        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q),
+        name="ptt", daemon=True)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     t_rps_worker = threading.Thread(
         target=rock_paper_game_worker,
         args=(rps_command_q, rps_result_q, video_frame_q),
-        name="rps_worker",
-        daemon=True
-    )
+        name="rps_worker", daemon=True)
 
-    # 모든 스레드 시작
     t_face.start()
     print(f"▶ FaceTracker 시작 (camera_index={cam_index})")
     t_visual_face.start()
@@ -197,22 +177,16 @@ def main():
     print("▶ 가위바위보 게임 스레드 시작")
 
     try:
-        # 휠 제어는 메인 스레드에서 처리 (macOS는 별도 루프 필요 없음)
         if platform.system() == "Darwin":
-            # macOS에서는 메인 스레드가 GUI 루프를 돌려야 함
             F.display_loop_main_thread(stop_event)
         else:
             W.wheel_loop(port, pkt, dxl_lock, stop_event)
-
     except KeyboardInterrupt:
         print("\n🛑 KeyboardInterrupt 감지 → 종료 신호 보냄")
         stop_event.set()
     finally:
-        if not stop_event.is_set():
-            stop_event.set()
-
+        if not stop_event.is_set(): stop_event.set()
         print("▶ 모든 스레드 종료 대기 중...")
-        # 모든 스레드가 stop_event를 확인하고 종료할 시간을 줍니다.
         t_ptt.join(timeout=5.0)
         t_visual_face.join(timeout=2.0)
         t_face.join(timeout=2.0)
@@ -220,7 +194,6 @@ def main():
         
         _graceful_shutdown(port, pkt, dxl_lock)
         print("■ launcher 정상 종료")
-
 
 if __name__ == "__main__":
     main()

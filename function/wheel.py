@@ -27,9 +27,9 @@ _pressed: Set[str] = set()
 
 def compute_cmd() -> Tuple[int, int]:
     # 우선순위: W > S > A > D
-    if 'w' in _pressed:
-        return (C.LEFT_DIR * C.BASE_SPEED_UNITS,  C.RIGHT_DIR * C.BASE_SPEED_UNITS)
     if 's' in _pressed:
+        return (C.LEFT_DIR * C.BASE_SPEED_UNITS,  C.RIGHT_DIR * C.BASE_SPEED_UNITS)
+    if 'w' in _pressed:
         return (-C.LEFT_DIR * C.BASE_SPEED_UNITS, -C.RIGHT_DIR * C.BASE_SPEED_UNITS)
     if 'a' in _pressed:
         return (-C.LEFT_DIR * C.TURN_SPEED_UNITS,  C.RIGHT_DIR * C.TURN_SPEED_UNITS)
