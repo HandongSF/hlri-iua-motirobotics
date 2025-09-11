@@ -71,7 +71,7 @@ class RobotFaceApp:
         self.clock = pygame.time.Clock()
         
         self.emotion_timer_start_time = pygame.time.get_ticks()
-        self.neutral_to_sleepy_duration = 20000 
+        self.neutral_to_sleepy_duration = 40000 
         self.wake_timer_start_time = 0 
         self.is_mouse_down = False
         self.mouse_down_time = 0

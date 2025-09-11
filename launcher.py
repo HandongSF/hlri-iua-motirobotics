@@ -45,6 +45,8 @@ from gemini_api import PressToTalk
 # 통합된 display 앱을 실행하기 위한 함수 import
 from display.main import run_face_app
 
+from function.face import face_tracker_worker
+from function.rock_paper import rock_paper_game_worker
 
 def _get_env(name: str, default: str) -> str:
     v = os.environ.get(name)
@@ -100,7 +102,7 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print(f"  - 포트 닫기 중 오류: {e}")
 
 
-def run_ptt(start_dance_cb, stop_dance_cb, emotion_queue, hotword_queue, stop_event):
+def run_ptt(start_dance_cb, stop_dance_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -108,7 +110,10 @@ def run_ptt(start_dance_cb, stop_dance_cb, emotion_queue, hotword_queue, stop_ev
             stop_dance_cb=stop_dance_cb,
             emotion_queue=emotion_queue,
             hotword_queue=hotword_queue,
-            stop_event=stop_event  # stop_event 전달
+            stop_event=stop_event,
+            rps_command_q=rps_command_q,
+            rps_result_q=rps_result_q
+                # stop_event 전달
         )
         app.run()
     except Exception as e:
@@ -128,6 +133,10 @@ def main():
     emotion_queue = queue.Queue()
     hotword_queue = queue.Queue()
 
+    rps_command_q = queue.Queue()
+    rps_result_q = queue.Queue()
+    video_frame_q = queue.Queue(maxsize=1)
+    
     def _handle_sigint(sig, frame):
         print("\n🛑 SIGINT(Ctrl+C) 감지 → 종료 신호 보냄")
         stop_event.set()
@@ -144,9 +153,10 @@ def main():
 
     cam_default = str(_default_cam_index())
     cam_index = int(_get_env("CAM_INDEX", cam_default))
+
     t_face = threading.Thread(
         target=F.face_tracker_worker,
-        args=(port, pkt, dxl_lock, stop_event),
+        args=(port, pkt, dxl_lock, stop_event, video_frame_q),
         kwargs=dict(camera_index=cam_index, draw_mesh=False, print_debug=True),
         name="face",
         daemon=True,
@@ -154,7 +164,7 @@ def main():
 
     t_visual_face = threading.Thread(
         target=run_face_app,
-        args=(emotion_queue, hotword_queue, stop_event), # stop_event 전달
+        args=(emotion_queue, hotword_queue, stop_event),
         name="visual_face",
         daemon=True,
     )
@@ -164,9 +174,16 @@ def main():
 
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, emotion_queue, hotword_queue, stop_event), # stop_event 전달
+        args=(start_dance, stop_dance, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q),
         name="ptt",
         daemon=True,
+    )
+
+    t_rps_worker = threading.Thread(
+        target=rock_paper_game_worker,
+        args=(rps_command_q, rps_result_q, video_frame_q),
+        name="rps_worker",
+        daemon=True
     )
 
     # 모든 스레드 시작
@@ -176,6 +193,8 @@ def main():
     print("▶ Visual Face App 스레드 시작")
     t_ptt.start()
     print("▶ PTT App 스레드 시작")
+    t_rps_worker.start() 
+    print("▶ 가위바위보 게임 스레드 시작")
 
     try:
         # 휠 제어는 메인 스레드에서 처리 (macOS는 별도 루프 필요 없음)
@@ -197,6 +216,7 @@ def main():
         t_ptt.join(timeout=5.0)
         t_visual_face.join(timeout=2.0)
         t_face.join(timeout=2.0)
+        t_rps_worker.join(timeout=5.0)
         
         _graceful_shutdown(port, pkt, dxl_lock)
         print("■ launcher 정상 종료")
