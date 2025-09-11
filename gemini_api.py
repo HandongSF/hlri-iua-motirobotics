@@ -34,6 +34,8 @@ import time  # 추가
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable
+import multiprocessing
+
 
 try:
     from dotenv import load_dotenv
@@ -265,7 +267,9 @@ class PressToTalk:
                  stop_dance_cb: Optional[Callable[[], None]] = None,
                  emotion_queue: Optional[queue.Queue] = None,
                  hotword_queue: Optional[queue.Queue] = None,
-                 stop_event: Optional[threading.Event] = None):
+                 stop_event: Optional[threading.Event] = None,
+                rps_command_q: Optional[multiprocessing.Queue] = None,
+                 rps_result_q: Optional[multiprocessing.Queue] = None):
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
             print("❗ GOOGLE_API_KEY가 없습니다."); sys.exit(1)
@@ -278,12 +282,13 @@ class PressToTalk:
             system_instruction=(
                 "너는 명령 라우터다. 한국어 문장을 보고 의도를 분류한다. "
                 "dance=사용자가 실제로 춤을 '시작하라고' 명령/요청/승인. "
+                "game=가위바위보 게임을 시작하자는 요청. "
                 "stop=춤을 '멈추라'는 명령/요청/승인. "
                 "chat=일반 대화(질문/잡담/설명/감정표현/춤에 대한 견해·가정적 질문 포함). "
                 "부정/금지/거절 표현(예:'춤 추지 마','춤은 안돼','그만두지 말고 계속')은 정확히 반영하라. "
                 "오직 아래 JSON만 출력:\n"
-                '{ "intent": "dance|stop|chat", "normalized_text": "<의미만 보존한 간결한 문장>", '
-                '"speakable_reply": "<의도가 chat일 때 1~2문장 공감형 짧은 답변. dance/stop이면 빈 문자열>" }'
+                '{ "intent": "dance|stop|game|chat", "normalized_text": "<의미만 보존한 간결한 문장>", '
+                '"speakable_reply": "<의도가 chat일 때 1~2문장 공감형 짧은 답변. dance/stop/game이면 빈 문자열>" }'
             ),
             generation_config={"response_mime_type": "application/json", "temperature": 0.2}
         )
@@ -298,6 +303,9 @@ class PressToTalk:
         self.last_activity_time = 0
         self.current_listener = None
         # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+        self.rps_command_q = rps_command_q
+        self.rps_result_q  = rps_result_q
 
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
@@ -381,7 +389,7 @@ class PressToTalk:
             raw = _extract_text(resp); data = json.loads(raw)
             if not isinstance(data, dict): raise ValueError("router JSON is not a dict")
             intent = data.get("intent", "chat")
-            if intent not in ("dance", "stop", "chat"): intent = "chat"
+            if intent not in ("dance", "stop", "game", "chat"): intent = "chat"
             return {"intent": intent, "normalized_text": str(data.get("normalized_text", text)), "speakable_reply": str(data.get("speakable_reply", "")) if intent == "chat" else ""}
         except Exception as e:
             print(f"(router 폴백) {e}")
@@ -394,6 +402,7 @@ class PressToTalk:
     def _analyze_and_send_emotion(self, text: str):
         if not self.emotion_queue or not text: return
         low_text = text.lower()
+        if any(w in low_text for w in ["가위바위보", "게임"]): return {"intent": "game", "normalized_text": text, "speakable_reply": ""}
         if any(w in low_text for w in ["신나", "재밌", "좋아", "행복", "최고"]): self.emotion_queue.put("HAPPY")
         elif any(w in low_text for w in ["놀라운", "놀랐", "깜짝", "세상에"]): self.emotion_queue.put("SURPRISED")
         elif any(w in low_text for w in ["슬퍼", "우울", "힘들", "속상"]): self.emotion_queue.put("SAD")
@@ -443,6 +452,33 @@ class PressToTalk:
 
                 model_text = "(춤 정지 명령 처리)"
 
+            elif intent == "game":
+                print("💡 의도: ROCK PAPER SCISSORS GAME")
+                self.tts.speak("네, 좋아요! 제가 가위바위보를 낼게요. 당신의 손동작을 보여주세요.")
+                time.sleep(1)
+                self.tts.speak("가위! 바위! 보!")
+                time.sleep(2)
+
+                game_result = "제스처를 인식하지 못했어요. 다음에 다시 해볼까요?"
+                
+
+                try:
+                    self.rps_command_q.put("START_GAME")
+                    game_result = self.rps_result_q.get(timeout=20)
+                    print(f"게임 결과: {game_result}")
+                    self.tts.speak(game_result)
+
+                    time.sleep(1)
+                    self.tts.speak("한번 더 하고 싶으시면 '가위바위보'라고 다시 말해주세요!")
+
+                except queue.Empty:
+                    print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
+                    self.tts.speak(game_result)
+                
+                model_text = f"게임 결과: {game_result}"
+                if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+
+
             print(f"[{ts}] [Gemini] {model_text}\n")
             if speak_text: self.tts.speak(speak_text)
             
@@ -489,8 +525,8 @@ class PressToTalk:
                     self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
                     self.current_listener.start()
                     
-                    # 25초(wake 3초 + neutral 20초 + 여유 2초) 동안 대기
-                    while time.time() - self.last_activity_time < 25:
+                    # 40초(wake 3초 + neutral 20초 + 여유 2초) 동안 대기
+                    while time.time() - self.last_activity_time < 40:
                         if self.stop_event.is_set():
                             break
                         time.sleep(0.1)

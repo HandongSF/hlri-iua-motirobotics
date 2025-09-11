@@ -56,7 +56,7 @@ def _can_show_window_in_this_thread() -> bool:
     return not (_IS_DARWIN and threading.current_thread() is not threading.main_thread())
 
 def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.Lock,
-                        stop_event: threading.Event,
+                        stop_event: threading.Event, video_frame_q: queue.Queue,
                         camera_index: int = 1,
                         draw_mesh: bool = True,
                         print_debug: bool = True):
@@ -94,6 +94,12 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         while not stop_event.is_set():
             ok, frame = cap.read()
             if not ok: break
+
+            try:
+                if not video_frame_q.full():
+                    video_frame_q.put_nowait(frame.copy())
+            except Exception:
+                pass
 
             h, w = frame.shape[:2]
             cx, cy = w // 2, h // 2
