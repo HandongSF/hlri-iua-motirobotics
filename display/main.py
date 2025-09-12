@@ -64,7 +64,7 @@ class RobotFaceApp:
         self.scaled_height = int(self.original_height * self.scale_factor)
         
         # 창 모드를 pygame.FULLSCREEN으로 변경
-        self.screen = pygame.display.set_mode((self.scaled_width, self.scaled_height), pygame.FULLSCREEN, display=monitor_index)
+        self.screen = pygame.display.set_mode((self.scaled_width, self.scaled_height), pygame.NOFRAME, display=monitor_index)
         self.base_surface = pygame.Surface((self.original_width, self.original_height))
 
         pygame.display.set_caption("Moti Face (통합 버전)")

@@ -74,7 +74,7 @@ def _find_input_device_by_name(name_substr: str) -> int | None:
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-1.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 PROMPT_TEXT = (
     "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
     " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
@@ -461,7 +461,7 @@ class PressToTalk:
                 self.rps_command_q.put("START_GAME")
                 
                 # 3. 사용자에게 게임 방법을 안내합니다.
-                self.tts.speak("네, 좋아요! 제가 가위바위보를 낼게요. 당신의 손동작을 보여주세요.")
+                self.tts.speak("네, 좋아요! 가위바위보 하면 당신의 손동작을 보여주세요.")
                 
                 # 4. 사용자가 손을 준비할 시간을 줍니다.
                 time.sleep(3) 

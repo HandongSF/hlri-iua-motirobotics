@@ -57,6 +57,15 @@ class RockPaperGame:
     def _run_game_logic(self):
         """실제 게임 한 판을 실행하는 로직"""
         print("💡 게임 시작 신호 받음. 제스처를 인식합니다.")
+
+        #--- 게임 시작 전 큐를 비웁니다. ---
+        while not self.video_frame_q.empty():
+            try:
+                self.video_frame_q.get_nowait()
+            except queue.Empty:
+                break
+
+
         best_gesture = "None"
         max_confidence_score = 0.0
         recognition_started = False
@@ -82,7 +91,10 @@ class RockPaperGame:
                         if confidence_score > max_confidence_score:
                             best_gesture = gesture_name
                             max_confidence_score = confidence_score
-                
+                            print(f"[{time.strftime('%H:%M:%S')}] Gesture: {gesture_name}, Score: {confidence_score:.2f}")
+                        else:
+                            print(f"[{time.strftime('%H:%M:%S')}] Gesture: None")
+                                
                 if recognition_started and time.time() - start_time >= 3:
                     break
             except queue.Empty:
@@ -104,8 +116,10 @@ class RockPaperGame:
         elif (user_choice == "Rock" and computer_choice == "Scissors") or \
              (user_choice == "Paper" and computer_choice == "Rock") or \
              (user_choice == "Scissors" and computer_choice == "Paper"):
+            print("사용자: " +user_choice)
             result_text = f"제가 {computer_choice_kr}를 냈네요. 당신이 이겼어요!"
         else:
+            print("사용자: " +user_choice)
             result_text = f"제가 {computer_choice_kr}를 냈어요. 제가 이겼네요!"
         
         self.result_q.put(result_text)
