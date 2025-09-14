@@ -28,7 +28,7 @@ import signal
 import threading
 import platform
 import queue
-import multiprocessing # multiprocessing 큐를 사용하기 위해 import
+import multiprocessing
 
 from dynamixel_sdk import PortHandler, PacketHandler
 
@@ -72,10 +72,8 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
     except Exception as e: print(f"  - 휠 정지 중 오류: {e}")
     try:
         with dxl_lock:
-            # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 2. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-            # 종료 시 RPS_ARM_ID 모터도 토크를 끄도록 ID 목록에 추가합니다.
-            ids = (C.PAN_ID, C.TILT_ID, *C.EXTRA_POS_IDS)
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            # RPS_ARM_ID를 포함한 모든 모터 토크 OFF
+            ids = (C.PAN_ID, C.TILT_ID, *C.EXTRA_POS_IDS, C.RPS_ARM_ID)
             for i in ids: IO.write1(pkt, port, i, C.ADDR_TORQUE_ENABLE, 0)
         print("  - 모든 모터 토크 OFF 완료")
     except Exception as e: print(f"  - 모터 토크 해제 중 오류: {e}")
@@ -85,15 +83,13 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 3. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-# PTT 스레드 실행 함수에 play_rps_motion_cb 인자를 추가합니다.
 def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
             start_dance_cb=start_dance_cb,
             stop_dance_cb=stop_dance_cb,
-            play_rps_motion_cb=play_rps_motion_cb, # 새로 추가된 콜백 전달
+            play_rps_motion_cb=play_rps_motion_cb,
             emotion_queue=emotion_queue,
             hotword_queue=hotword_queue,
             stop_event=stop_event,
@@ -103,7 +99,6 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, ho
         app.run()
     except Exception as e: print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
     finally: print("■ PTT 스레드 종료")
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 def main():
     print("▶ launcher: (통합 버전) FaceTrack + Wheels + PTT + Dance + Visual Face")
@@ -116,10 +111,13 @@ def main():
     emotion_queue = queue.Queue()
     hotword_queue = queue.Queue()
     
-    # multiprocessing.Queue 사용
     rps_command_q = multiprocessing.Queue()
     rps_result_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
+    
+    # ▼▼▼ 1. 'Sleepy' 상태를 관리할 이벤트 객체 생성 ▼▼▼
+    sleepy_event = threading.Event()
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     
     def _handle_sigint(sig, frame):
         print("\n🛑 SIGINT(Ctrl+C) 감지 → 종료 신호 보냄")
@@ -138,29 +136,29 @@ def main():
     cam_default = str(_default_cam_index())
     cam_index = int(_get_env("CAM_INDEX", cam_default))
 
+    # ▼▼▼ 2. face_tracker_worker 스레드에 sleepy_event 전달 ▼▼▼
     t_face = threading.Thread(
         target=F.face_tracker_worker,
-        args=(port, pkt, dxl_lock, stop_event, video_frame_q),
+        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event), # sleepy_event 추가
         kwargs=dict(camera_index=cam_index, draw_mesh=False, print_debug=True),
         name="face", daemon=True)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
+    # ▼▼▼ 3. visual_face 스레드에도 sleepy_event 전달 ▼▼▼
     t_visual_face = threading.Thread(
         target=run_face_app,
-        args=(emotion_queue, hotword_queue, stop_event),
+        args=(emotion_queue, hotword_queue, stop_event, sleepy_event), # sleepy_event 추가
         name="visual_face", daemon=True)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     
-    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 4. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    # 각 동작 함수를 lambda로 정의하여 PressToTalk 클래스에 전달합니다.
     start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
-    play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock) # 새로 추가된 동작 함수
+    play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        # run_ptt 함수에 새로 추가한 play_rps_motion을 전달합니다.
         args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q),
         name="ptt", daemon=True)
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     t_rps_worker = threading.Thread(
         target=rock_paper_game_worker,
