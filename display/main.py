@@ -197,12 +197,12 @@ class RobotFaceApp:
         if self.current_emotion_key == "WAKE":
             if pygame.time.get_ticks() - self.wake_timer_start_time >= 3000:
                 self.change_emotion("NEUTRAL")
+
         elif self.current_emotion_key == "NEUTRAL":
             if self.click_count >= 3:
                 self.change_emotion("ANGRY")
                 self.click_count = 0
-            elif pygame.time.get_ticks() - self.emotion_timer_start_time >= self.neutral_to_sleepy_duration:
-                self.change_emotion("SLEEPY")
+
         elif self.current_emotion_key == "SLEEPY":
             if self.is_mouse_down and pygame.time.get_ticks() - self.mouse_down_time >= self.hold_duration: self.change_emotion("WAKE")
         else:
