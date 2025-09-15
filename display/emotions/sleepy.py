@@ -83,8 +83,7 @@ class Emotion:
         pygame.draw.rect(mouth_surface, (0, 0, 0, 0), (0, 0, mouth_rect.width, mouth_rect.height / 2))
         
         # 혀 그리기 (입 안쪽에 작은 핑크색 타원)
-        tongue_rect = pygame.Rect(mouth_rect.width * 0.2, mouth_rect.height * 0.1, mouth_rect.width * 0.6, mouth_rect.height * 0.5)
-        pygame.draw.ellipse(mouth_surface, PINK, tongue_rect)
+        
         
         surface.blit(mouth_surface, mouth_rect.topleft)
 
