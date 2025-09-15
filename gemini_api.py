@@ -588,6 +588,8 @@ class PressToTalk:
                     
                     if not self.stop_event.is_set():
                             print("▶ 대화 세션 시간 초과. 다시 핫워드 대기 상태로 전환합니다.")
+                            if self.emotion_queue:
+                                self.emotion_queue.put("SLEEPY")
             except queue.Empty:
                 continue
             except (KeyboardInterrupt, SystemExit):
