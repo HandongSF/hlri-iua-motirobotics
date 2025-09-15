@@ -85,6 +85,7 @@ class RobotFaceApp:
         }
         
         self.emotion_queue = emotion_queue
+        self.hotword_queue = hotword_queue
         self.stop_event = stop_event or threading.Event()
         self.sleepy_event = sleepy_event
         self.target_offset = [0.0, 0.0]
@@ -154,7 +155,7 @@ class RobotFaceApp:
                     pygame.K_1: "NEUTRAL", pygame.K_2: "HAPPY", pygame.K_3: "EXCITED",
                     pygame.K_4: "TENDER", pygame.K_5: "SCARED", pygame.K_6: "ANGRY",
                     pygame.K_7: "SAD", pygame.K_8: "SURPRISED", pygame.K_9: "THINKING", 
-                    pygame.K_0: "SLEEPY"
+                    # pygame.K_0: "SLEEPY"
                 }
                 if event.key in key_map: self.change_emotion(key_map[event.key])
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -204,7 +205,11 @@ class RobotFaceApp:
                 self.click_count = 0
 
         elif self.current_emotion_key == "SLEEPY":
-            if self.is_mouse_down and pygame.time.get_ticks() - self.mouse_down_time >= self.hold_duration: self.change_emotion("WAKE")
+            if self.is_mouse_down and pygame.time.get_ticks() - self.mouse_down_time >= self.hold_duration:
+                print("👋 FaceApp: 터치로 깨어남! PTT 모듈에 'hotword_detected' 신호 전송.")
+                if self.hotword_queue:
+                    self.hotword_queue.put("hotword_detected")
+                self.change_emotion("WAKE")
         else:
             if pygame.time.get_ticks() - self.emotion_timer_start_time >= 10000:
                 self.change_emotion("NEUTRAL")
