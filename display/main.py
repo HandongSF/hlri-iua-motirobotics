@@ -48,12 +48,11 @@ from .hotword import HotwordDetector
 load_dotenv(dotenv_path='./.env.local')
 
 class RobotFaceApp:
-    def __init__(self, emotion_queue=None, hotword_queue=None, stop_event=None):
+    def __init__(self, emotion_queue=None, hotword_queue=None, stop_event=None, sleepy_event=None):
         pygame.init()
 
         monitor_sizes = pygame.display.get_desktop_sizes()
         monitor_index = 0
-        # 모니터가 2개 이상이면 1번 인덱스(보통 두 번째 모니터) 사용
         if len(monitor_sizes) > 1:
             monitor_index = 1
 
@@ -63,7 +62,6 @@ class RobotFaceApp:
         self.scaled_width = int(self.original_width * self.scale_factor)
         self.scaled_height = int(self.original_height * self.scale_factor)
         
-        # 창 모드를 pygame.FULLSCREEN으로 변경
         self.screen = pygame.display.set_mode((self.scaled_width, self.scaled_height), pygame.NOFRAME, display=monitor_index)
         self.base_surface = pygame.Surface((self.original_width, self.original_height))
 
@@ -88,6 +86,7 @@ class RobotFaceApp:
         
         self.emotion_queue = emotion_queue
         self.stop_event = stop_event or threading.Event()
+        self.sleepy_event = sleepy_event
         self.target_offset = [0.0, 0.0]
         self.move_speed = 1.5
         self.max_pupil_move_distance = 20
@@ -124,6 +123,18 @@ class RobotFaceApp:
 
         if self.current_emotion_key != new_emotion_key:
             print(f"감정 변경: {self.current_emotion_key} -> {new_emotion_key}")
+            
+            # 3. sleepy_event 제어 로직
+            if self.sleepy_event:
+                # 새로 SLEEPY 상태가 될 때, 얼굴 추적을 멈추도록 신호를 보냄
+                if new_emotion_key == "SLEEPY":
+                    print("💤 FaceApp: Sleepy 모드 진입. 얼굴 추적 중지 신호(set) 보냄.")
+                    self.sleepy_event.set()
+                # SLEEPY 상태였다가 다른 상태로 깨어날 때, 얼굴 추적을 재개하도록 신호를 보냄
+                elif self.current_emotion_key == "SLEEPY":
+                    print("😀 FaceApp: Active 모드 진입. 얼굴 추적 재개 신호(clear) 보냄.")
+                    self.sleepy_event.clear()
+
             self.current_emotion_key = new_emotion_key
             self.emotion_timer_start_time = pygame.time.get_ticks()
             if hasattr(self.emotions[self.current_emotion_key], 'reset'):
@@ -258,10 +269,15 @@ class RobotFaceApp:
         pygame.quit()
         print("Face App 정상 종료")
 
-
-def run_face_app(emotion_q, hotword_q, stop_event):
+def run_face_app(emotion_q, hotword_q, stop_event, sleepy_event: threading.Event):
     try:
-        app = RobotFaceApp(emotion_queue=emotion_q, hotword_queue=hotword_q, stop_event=stop_event)
+        # RobotFaceApp 생성자에 sleepy_event 전달
+        app = RobotFaceApp(
+            emotion_queue=emotion_q, 
+            hotword_queue=hotword_q, 
+            stop_event=stop_event, 
+            sleepy_event=sleepy_event
+        )
         app.run()
     except Exception as e:
         print(f"Face App 스레드를 시작하는 중 오류 발생: {e}")

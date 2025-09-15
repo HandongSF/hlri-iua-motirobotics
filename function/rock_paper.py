@@ -101,7 +101,7 @@ class RockPaperGame:
                 continue
 
         if best_gesture == "None":
-            self.result_q.put("제스처를 인식하지 못했어요. 다음에 다시 해볼까요?")
+            self.result_q.put("제스처를 인식하지 못했어요.")
             return
 
         user_choice_map = {"Victory": "Scissors", "Closed_Fist": "Rock", "Open_Palm": "Paper"}
