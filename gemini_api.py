@@ -496,6 +496,9 @@ class PressToTalk:
 
             elif intent == "game":
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
+                print("📷 마이크-카메라 자원 충돌 방지를 위해 5초 대기...")
+                time.sleep(5) 
+
                 try:
                 # 게임 시작 시 '바쁨 신호' 올리기
                     self.raise_busy_signal() 
@@ -565,6 +568,25 @@ class PressToTalk:
         except Exception as e: print(f"[키 처리 오류 on_release] {e}", file=sys.stderr)
 
     def run(self):
+        print("▶ 초기 대화 세션을 시작합니다. (40초 후 비활성화)")
+        self.last_activity_time = time.time()
+        self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
+        self.current_listener.start()
+        
+        # 첫 세션의 타임아웃 루프: 40초간 활동이 없거나 busy 신호가 없으면 종료됩니다.
+        while not self.stop_event.is_set() and ((self.busy_signals > 0) or (time.time() - self.last_activity_time < 40)):
+            time.sleep(0.1)
+
+        if self.current_listener.is_alive():
+            self.current_listener.stop()
+            self.current_listener = None 
+
+        # 초기 세션이 종료된 후, 아직 프로그램 종료 신호가 없다면 SLEEPY 상태로 전환합니다.
+        if not self.stop_event.is_set():
+            print("▶ 초기 대화 세션 시간 초과. 이제 핫워드 대기 상태로 전환합니다.")
+            if self.emotion_queue:
+                self.emotion_queue.put("SLEEPY")
+
         while not self.stop_event.is_set():
             print("▶ '안녕 모티' 호출(SLEEPY 상태에서)을 기다립니다... (종료: ESC)")
             try:
