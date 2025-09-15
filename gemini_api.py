@@ -1,21 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
-
 # gemini_api.py
 
 from __future__ import annotations
@@ -35,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Callable
 import multiprocessing
-
+from functools import wraps
 
 try:
     from dotenv import load_dotenv
@@ -70,6 +52,30 @@ def _find_input_device_by_name(name_substr: str) -> int | None:
     except Exception:
         pass
     return None
+
+def keep_awake(func: Callable):
+    @wraps(func)
+    def wrapper(self: 'PressToTalk', *args, **kwargs):
+        stop_keep_alive = threading.Event()
+        keep_alive_thread = None
+
+        def keep_alive_worker():
+            while not stop_keep_alive.wait(timeout=5.0):
+                if self.emotion_queue:
+                    self.emotion_queue.put("RESET_SLEEPY_TIMER")
+
+        if self.emotion_queue:
+            keep_alive_thread = threading.Thread(target=keep_alive_worker, daemon=True)
+            keep_alive_thread.start()
+
+        try:
+            return func(self, *args, **kwargs)
+        finally:
+            if keep_alive_thread:
+                stop_keep_alive.set()
+            if self.emotion_queue:
+                self.emotion_queue.put("RESET_SLEEPY_TIMER")
+    return wrapper
 
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
@@ -302,6 +308,10 @@ class PressToTalk:
 
         self.rps_command_q = rps_command_q
         self.rps_result_q  = rps_result_q
+        self.busy_lock = threading.Lock()
+        self.busy_signals = 0
+        self.background_keep_alive_thread = None
+        self.stop_background_keep_alive = threading.Event()
 
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
@@ -326,6 +336,37 @@ class PressToTalk:
         if v_id: print(f"▶ TTS Voice : {v_id}")
         if out_desc: print(f"▶ TTS Output: {out_desc}")
         print("----------------------------------------------------------------\n")
+
+    # ▼▼▼ 2. 통합 활동 관리자 제어 함수 추가 ▼▼▼
+    def raise_busy_signal(self):
+        """백그라운드 작업 시작을 알리고, 필요하면 keep-alive 스레드를 활성화합니다."""
+        with self.busy_lock:
+            self.busy_signals += 1
+            print(f"⚡ 바쁨 신호 증가 (현재: {self.busy_signals})")
+            if self.busy_signals == 1 and self.emotion_queue:
+                self.stop_background_keep_alive.clear()
+                
+                def worker():
+                    while not self.stop_background_keep_alive.wait(5.0):
+                        if self.emotion_queue:
+                            self.emotion_queue.put("RESET_SLEEPY_TIMER")
+                    print("☕ 백그라운드 keep-alive 자연 종료")
+
+                self.background_keep_alive_thread = threading.Thread(target=worker, daemon=True)
+                self.background_keep_alive_thread.start()
+                print("🏃 백그라운드 keep-alive 시작됨")
+
+    def lower_busy_signal(self):
+        """백그라운드 작업 종료를 알리고, 모든 작업이 끝나면 keep-alive 스레드를 중지합니다."""
+        with self.busy_lock:
+            self.busy_signals = max(0, self.busy_signals - 1)
+            print(f"⚡ 바쁨 신호 감소 (현재: {self.busy_signals})")
+            if self.busy_signals == 0:
+                self.stop_background_keep_alive.set()
+                self.background_keep_alive_thread = None
+                self.last_activity_time = time.time()
+                print("✅ 모든 백그라운드 작업 완료. keep-alive 중지됨")
+                print("✅ RESET_SLEEPY_TIMER")
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status: print(f"[오디오 경고] {status}", file=sys.stderr)
@@ -407,6 +448,7 @@ class PressToTalk:
         elif any(w in low_text for w in ["궁금", "생각", "글쎄", "흠.."]): self.emotion_queue.put("THINKING")
         else: self.emotion_queue.put("NEUTRAL")
 
+    @keep_awake
     def _transcribe_then_chat(self, wav_bytes: bytes):
         try:
             b64 = base64.b64encode(wav_bytes).decode("ascii")
@@ -427,7 +469,10 @@ class PressToTalk:
             elif intent == "dance":
                 print("💡 의도: DANCE START")
                 if callable(self.start_dance_cb):
-                    try: self.start_dance_cb()
+                    try: 
+                        # 바쁨 신호 올리기
+                        self.raise_busy_signal() 
+                        self.start_dance_cb()
                     except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
                 
                 if self.emotion_queue:
@@ -440,7 +485,10 @@ class PressToTalk:
             elif intent == "stop":
                 print("💡 의도: DANCE STOP")
                 if callable(self.stop_dance_cb):
-                    try: self.stop_dance_cb()
+                    try: 
+                        self.stop_dance_cb()
+                        # 바쁨 신호 내리기
+                        self.lower_busy_signal() 
                     except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
                 
                 if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
@@ -448,70 +496,53 @@ class PressToTalk:
 
             elif intent == "game":
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
+                try:
+                # 게임 시작 시 '바쁨 신호' 올리기
+                    self.raise_busy_signal() 
+                    self.tts.speak("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
+                    time.sleep(1)
+                    final_game_result = ""
+
+                    while True: 
+                        if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
+                        self.rps_command_q.put("START_GAME")
+                        self.tts.speak("준비하시고...")
+                        time.sleep(2) 
+                        
+                        if callable(self.play_rps_motion_cb):
+                            threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
+                        self.tts.speak("가위! 바위! 보!")
+                        
+                        game_result = ""
+                        try:
+                            game_result = self.rps_result_q.get(timeout=20)
+                            print(f"게임 결과 수신: {game_result}")
+                            self.tts.speak(game_result)
+                            time.sleep(1)
+                        except queue.Empty:
+                            print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
+                            game_result = "제스처를 인식하지 못했어요."
+                            self.tts.speak(game_result)
+                        
+                        final_game_result = game_result
+                        
+                        if "비겼" in game_result or "인식하지 못했어요" in game_result:
+                            self.tts.speak("다시 한 번 할게요!")
+                            time.sleep(2)
+                            continue 
+                        else:
+                            self.tts.speak("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
+                            break
+                finally:
+                    self.lower_busy_signal() # 게임 종료 시 '바쁨 신호' 내리기
                 
-                # 1. 게임 시작 안내 (한 번만)
-                self.tts.speak("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
-                time.sleep(1)
-                
-                final_game_result = ""
-
-                # 2. 게임 루프 시작: 승패가 결정되거나 타임아웃 될 때까지 반복
-                while True: 
-                    # --- 한 라운드 시작 ---
-                    
-                    # 3. 매 라운드 시작 시 SLEEPY 타이머 리셋
-                    if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
-                    
-                    # 4. (백그라운드) 제스처 인식 스레드에 게임 라운드 시작 신호 전송
-                    self.rps_command_q.put("START_GAME")
-                    
-                    # 5. 사용자가 손을 준비할 시간 + 안내
-                    self.tts.speak("준비하시고...")
-                    time.sleep(2) 
-                    
-                    # 6. "가위! 바위! 보!" 음성과 팔 동작 동시 시작
-                    if callable(self.play_rps_motion_cb):
-                        threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
-                    self.tts.speak("가위! 바위! 보!")
-                    
-                    # 7. 제스처 인식 결과 기다리기 (최대 20초)
-                    game_result = ""
-                    try:
-                        game_result = self.rps_result_q.get(timeout=20)
-                        print(f"게임 결과 수신: {game_result}")
-                        self.tts.speak(game_result) # 수신한 결과 바로 음성 출력
-                        time.sleep(1) # 사용자가 결과를 인지할 시간
-
-                    except queue.Empty:
-                        print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
-                        game_result = "제스처를 인식하지 못했어요."
-                        self.tts.speak(game_result)
-                    
-                    final_game_result = game_result # 마지막 결과를 저장
-                    
-                    # --- 한 라운드 종료 ---
-                    
-                    # 8. 결과 확인 및 재시작/종료 결정
-                    # "비겼" 또는 "인식하지 못했" 이라는 단어가 포함된 경우, 게임을 다시 시작
-                    if "비겼" in game_result or "인식하지 못했어요" in game_result:
-                        self.tts.speak("다시 한 번 할게요!")
-                        time.sleep(2) # 다음 라운드 전 잠시 대기
-                        continue # 루프의 처음으로 돌아가서 다음 라운드 시작
-                    else:
-                        # 승리, 패배 등 다른 결과가 나오면 게임 종료
-                        self.tts.speak("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
-                        break # 루프 종료
-
-                model_text = f"게임 종료. 최종 결과: {final_game_result}"
-                if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-
+                    model_text = f"게임 종료. 최종 결과: {final_game_result}"
+                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+            
             print(f"[{ts}] [Gemini] {model_text}\n")
             if speak_text: self.tts.speak(speak_text)
             
         except Exception as e: print(f"❌ 처리 실패: {e}\n")
-        finally:
-            if self.emotion_queue:
-                self.emotion_queue.put("RESET_SLEEPY_TIMER")
 
     def _on_press(self, key):
         if self.stop_event.is_set(): return False
@@ -548,7 +579,7 @@ class PressToTalk:
                     self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
                     self.current_listener.start()
                     
-                    while time.time() - self.last_activity_time < 40:
+                    while (self.busy_signals > 0) or (time.time() - self.last_activity_time < 40):
                         if self.stop_event.is_set(): break
                         time.sleep(0.1)
 
@@ -557,6 +588,8 @@ class PressToTalk:
                     
                     if not self.stop_event.is_set():
                             print("▶ 대화 세션 시간 초과. 다시 핫워드 대기 상태로 전환합니다.")
+                            if self.emotion_queue:
+                                self.emotion_queue.put("SLEEPY")
             except queue.Empty:
                 continue
             except (KeyboardInterrupt, SystemExit):
