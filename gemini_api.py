@@ -80,7 +80,7 @@ def keep_awake(func: Callable):
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-1.5-flash")
 PROMPT_TEXT = (
     "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
     " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
@@ -128,7 +128,7 @@ class RecorderState:
 
 class SapiTTSWorker:
     def __init__(self):
-        self._q: queue.Queue[str | None] = queue.Queue()
+        self._q: queue.Queue[str | dict | None] = queue.Queue()
         self.voice_id: str | None = None
         self.output_device_desc: str | None = None
         self.ready = threading.Event()
@@ -136,10 +136,11 @@ class SapiTTSWorker:
     def start(self):
         self.thread.start()
         self.ready.wait(timeout=5)
-    def speak(self, text: str):
-        if not text: return
+    def speak(self, data):
+        if not data: return
+        text = data if isinstance(data, str) else data.get("text", "")
         print(f"🔊 TTS enqueue ({len(text)} chars)")
-        self._q.put(text)
+        self._q.put(data)
     def close_and_join(self, drain: bool = True, timeout: float = 15.0):
         try:
             if drain:
@@ -191,6 +192,10 @@ class SapiTTSWorker:
             except Exception: pass
             try: voice.Volume = max(0, min(100, TTS_VOLUME))
             except Exception: pass
+
+            default_rate = voice.Rate
+            default_volume = voice.Volume
+
             print("🎧 사용 가능한 음성 목록 (SAPI):")
             for i in range(voices.Count): v = voices.Item(i); print(f"  - [{i}] id='{v.Id}', desc='{v.GetDescription()}'")
             print("🔉 사용 가능한 출력 장치 (SAPI):")
@@ -203,8 +208,20 @@ class SapiTTSWorker:
                 item = self._q.get()
                 if item is None: self._q.task_done(); break
                 try:
-                    print("🔈 TTS speaking..."); voice.Speak(item); print("✅ TTS done")
-                finally: self._q.task_done()
+                    if isinstance(item, dict):
+                        text = item.get("text")
+                        voice.Rate = item.get("rate", default_rate)
+                        voice.Volume = item.get("volume", default_volume)
+                    else:
+                        text = item
+
+                    if text:
+                        print("🔈 TTS speaking..."); voice.Speak(text); print("✅ TTS done")
+
+                finally:
+                    voice.Rate = default_rate
+                    voice.Volume = default_volume
+                    self._q.task_done()
         except Exception as e: print(f"ℹ️ TTS 스레드 오류: {e}"); self.ready.set()
         finally:
             try:
@@ -213,13 +230,16 @@ class SapiTTSWorker:
 
 class TypecastTTSWorker:
     def __init__(self):
-        self._q: queue.Queue[str | None] = queue.Queue()
+        self._q: queue.Queue[str | dict | None] = queue.Queue()
         self.ready = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=False)
     def start(self):
         self.thread.start(); self.ready.wait(timeout=5)
-    def speak(self, text: str):
-        if text: print(f"🔊 TTS enqueue ({len(text)} chars)"); self._q.put(text)
+    def speak(self, data):
+        if not data: return
+        text = data if isinstance(data, str) else data.get("text", "")
+        print(f"🔊 TTS enqueue ({len(text)} chars)")
+        self._q.put(data)
     def close_and_join(self, drain: bool = True, timeout: float = 30.0):
         try:
             if drain: self._q.join()
@@ -246,7 +266,29 @@ class TypecastTTSWorker:
                 item = self._q.get()
                 if item is None: self._q.task_done(); break
                 try:
-                    payload = {"voice_id": voice_id, "text": item, "model": model, "language": language, "output": {"volume": 100, "audio_pitch": 0, "audio_tempo": 1.0, "audio_format": audio_format}}
+                    if isinstance(item, dict):
+                        text = item.get("text")
+                        rate_sapi = item.get("rate", 0) 
+                        rate_multiplier = 1.0 + (rate_sapi / 10.0) * 0.5 
+                        volume = item.get("volume", 100)
+                        pitch = item.get("pitch", 0)
+                    else:
+                        text = item
+                        rate_multiplier = 1.0
+                        volume = 100
+                        pitch = 0
+
+                    if not text: continue
+                    
+                    payload = {
+                        "voice_id": voice_id, "text": text, "model": model, "language": language, 
+                        "output": {
+                            "volume": volume, 
+                            "audio_pitch": pitch, 
+                            "audio_tempo": rate_multiplier, 
+                            "audio_format": audio_format
+                        }
+                    }
                     if emotion: payload["prompt"] = {"emotion_preset": emotion, "emotion_intensity": intensity}
                     if seed is not None: payload["seed"] = seed
                     r = requests.post(url, headers=headers, json=payload, timeout=60)
@@ -271,7 +313,8 @@ class PressToTalk:
                  hotword_queue: Optional[queue.Queue] = None,
                  stop_event: Optional[threading.Event] = None,
                  rps_command_q: Optional[multiprocessing.Queue] = None,
-                 rps_result_q: Optional[multiprocessing.Queue] = None):
+                 rps_result_q: Optional[multiprocessing.Queue] = None,
+                 sleepy_event: Optional[threading.Event] = None):
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -326,6 +369,11 @@ class PressToTalk:
             self.tts.speak(GREETING_TEXT)
             if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
 
+        self.sleepy_event = sleepy_event
+        if self.sleepy_event:
+            self.snoring_thread = threading.Thread(target=self._snoring_worker, daemon=True)
+            self.snoring_thread.start()
+
     def _print_intro(self):
         print("\n=== Gemini PTT (통합 버전) ===")
         print("▶ '안녕 모티'로 호출(SLEEPY 상태) → 스페이스바로 대화(NEUTRAL 상태) → ESC로 종료")
@@ -337,7 +385,6 @@ class PressToTalk:
         if out_desc: print(f"▶ TTS Output: {out_desc}")
         print("----------------------------------------------------------------\n")
 
-    # ▼▼▼ 2. 통합 활동 관리자 제어 함수 추가 ▼▼▼
     def raise_busy_signal(self):
         """백그라운드 작업 시작을 알리고, 필요하면 keep-alive 스레드를 활성화합니다."""
         with self.busy_lock:
@@ -470,7 +517,6 @@ class PressToTalk:
                 print("💡 의도: DANCE START")
                 if callable(self.start_dance_cb):
                     try: 
-                        # 바쁨 신호 올리기
                         self.raise_busy_signal() 
                         self.start_dance_cb()
                     except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
@@ -487,7 +533,6 @@ class PressToTalk:
                 if callable(self.stop_dance_cb):
                     try: 
                         self.stop_dance_cb()
-                        # 바쁨 신호 내리기
                         self.lower_busy_signal() 
                     except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
                 
@@ -496,11 +541,7 @@ class PressToTalk:
 
             elif intent == "game":
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
-                print("📷 마이크-카메라 자원 충돌 방지를 위해 5초 대기...")
-                time.sleep(5) 
-
                 try:
-                # 게임 시작 시 '바쁨 신호' 올리기
                     self.raise_busy_signal() 
                     self.tts.speak("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
                     time.sleep(1)
@@ -537,7 +578,7 @@ class PressToTalk:
                             self.tts.speak("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
                             break
                 finally:
-                    self.lower_busy_signal() # 게임 종료 시 '바쁨 신호' 내리기
+                    self.lower_busy_signal()
                 
                     model_text = f"게임 종료. 최종 결과: {final_game_result}"
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
@@ -573,7 +614,6 @@ class PressToTalk:
         self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
         self.current_listener.start()
         
-        # 첫 세션의 타임아웃 루프: 40초간 활동이 없거나 busy 신호가 없으면 종료됩니다.
         while not self.stop_event.is_set() and ((self.busy_signals > 0) or (time.time() - self.last_activity_time < 40)):
             time.sleep(0.1)
 
@@ -581,7 +621,6 @@ class PressToTalk:
             self.current_listener.stop()
             self.current_listener = None 
 
-        # 초기 세션이 종료된 후, 아직 프로그램 종료 신호가 없다면 SLEEPY 상태로 전환합니다.
         if not self.stop_event.is_set():
             print("▶ 초기 대화 세션 시간 초과. 이제 핫워드 대기 상태로 전환합니다.")
             if self.emotion_queue:
@@ -626,3 +665,25 @@ class PressToTalk:
         finally:
             self.tts.close_and_join(drain=True)
         print("PTT App 정상 종료")
+        
+    def _snoring_worker(self):
+        """sleepy_event가 켜져 있는 동안 주기적으로 코를 고는 워커"""
+        print("▶ 코골이 스레드 시작됨 (현재 대기 중).")
+        snore_options = {
+            "text": "드르렁... 쿠우...",
+            "rate": -10,
+            "volume": 20
+        }
+        SNORE_INTERVAL = 8
+
+        while not self.stop_event.is_set():
+            self.sleepy_event.wait() 
+
+            while self.sleepy_event.is_set() and not self.stop_event.is_set():
+                self.tts.speak(snore_options)
+                
+                for _ in range(SNORE_INTERVAL * 2):
+                    if not self.sleepy_event.is_set() or self.stop_event.is_set():
+                        break
+                    time.sleep(0.5)
+        print("■ 코골이 스레드 종료.")

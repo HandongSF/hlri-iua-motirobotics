@@ -83,7 +83,8 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q):
+# ▼▼▼▼▼ 1. run_ptt 함수 정의에 sleepy_event 인자 추가 ▼▼▼▼▼
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -94,11 +95,13 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, ho
             hotword_queue=hotword_queue,
             stop_event=stop_event,
             rps_command_q=rps_command_q,
-            rps_result_q=rps_result_q
+            rps_result_q=rps_result_q,
+            sleepy_event=sleepy_event  # PressToTalk 생성자에 sleepy_event 전달
         )
         app.run()
     except Exception as e: print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
     finally: print("■ PTT 스레드 종료")
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 def main():
     print("▶ launcher: (통합 버전) FaceTrack + Wheels + PTT + Dance + Visual Face")
@@ -115,9 +118,8 @@ def main():
     rps_result_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
     
-    # ▼▼▼ 1. 'Sleepy' 상태를 관리할 이벤트 객체 생성 ▼▼▼
+    # 'Sleepy' 상태를 관리할 이벤트 객체 생성
     sleepy_event = threading.Event()
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     
     def _handle_sigint(sig, frame):
         print("\n🛑 SIGINT(Ctrl+C) 감지 → 종료 신호 보냄")
@@ -136,29 +138,29 @@ def main():
     cam_default = str(_default_cam_index())
     cam_index = int(_get_env("CAM_INDEX", cam_default))
 
-    # ▼▼▼ 2. face_tracker_worker 스레드에 sleepy_event 전달 ▼▼▼
+    # face_tracker_worker 스레드에 sleepy_event 전달
     t_face = threading.Thread(
         target=F.face_tracker_worker,
-        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event), # sleepy_event 추가
+        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event),
         kwargs=dict(camera_index=cam_index, draw_mesh=False, print_debug=True),
         name="face", daemon=True)
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-    # ▼▼▼ 3. visual_face 스레드에도 sleepy_event 전달 ▼▼▼
+    # visual_face 스레드에도 sleepy_event 전달
     t_visual_face = threading.Thread(
         target=run_face_app,
-        args=(emotion_queue, hotword_queue, stop_event, sleepy_event), # sleepy_event 추가
+        args=(emotion_queue, hotword_queue, stop_event, sleepy_event),
         name="visual_face", daemon=True)
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     
     start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
     play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
     
+    # ▼▼▼▼▼ 2. PTT 스레드를 생성할 때 sleepy_event 인자 전달 ▼▼▼▼▼
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q),
+        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event),
         name="ptt", daemon=True)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     t_rps_worker = threading.Thread(
         target=rock_paper_game_worker,
