@@ -48,7 +48,8 @@ from .hotword import HotwordDetector
 load_dotenv(dotenv_path='./.env.local')
 
 class RobotFaceApp:
-    def __init__(self, emotion_queue=None, hotword_queue=None, stop_event=None, sleepy_event=None):
+    # ▼▼▼ 1. __init__ 메서드에 ptt_thread 인자 추가 ▼▼▼
+    def __init__(self, emotion_queue=None, hotword_queue=None, stop_event=None, sleepy_event=None, ptt_thread=None):
         pygame.init()
 
         monitor_sizes = pygame.display.get_desktop_sizes()
@@ -88,6 +89,7 @@ class RobotFaceApp:
         self.hotword_queue = hotword_queue
         self.stop_event = stop_event or threading.Event()
         self.sleepy_event = sleepy_event
+        self.ptt_thread = ptt_thread # ptt_thread 객체 저장
         self.target_offset = [0.0, 0.0]
         self.move_speed = 1.5
         self.max_pupil_move_distance = 20
@@ -125,13 +127,10 @@ class RobotFaceApp:
         if self.current_emotion_key != new_emotion_key:
             print(f"감정 변경: {self.current_emotion_key} -> {new_emotion_key}")
             
-            # 3. sleepy_event 제어 로직
             if self.sleepy_event:
-                # 새로 SLEEPY 상태가 될 때, 얼굴 추적을 멈추도록 신호를 보냄
                 if new_emotion_key == "SLEEPY":
                     print("💤 FaceApp: Sleepy 모드 진입. 얼굴 추적 중지 신호(set) 보냄.")
                     self.sleepy_event.set()
-                # SLEEPY 상태였다가 다른 상태로 깨어날 때, 얼굴 추적을 재개하도록 신호를 보냄
                 elif self.current_emotion_key == "SLEEPY":
                     print("😀 FaceApp: Active 모드 진입. 얼굴 추적 재개 신호(clear) 보냄.")
                     self.sleepy_event.clear()
@@ -155,7 +154,6 @@ class RobotFaceApp:
                     pygame.K_1: "NEUTRAL", pygame.K_2: "HAPPY", pygame.K_3: "EXCITED",
                     pygame.K_4: "TENDER", pygame.K_5: "SCARED", pygame.K_6: "ANGRY",
                     pygame.K_7: "SAD", pygame.K_8: "SURPRISED", pygame.K_9: "THINKING", 
-                    # pygame.K_0: "SLEEPY"
                 }
                 if event.key in key_map: self.change_emotion(key_map[event.key])
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -270,18 +268,26 @@ class RobotFaceApp:
                 running = False
         
         print("Face App 종료 절차 시작...")
+        
+        # ▼▼▼ 2. pygame.quit() 호출 전에 이 코드를 추가 ▼▼▼
+        # PTT 스레드가 살아있다면, 작별 인사를 마칠 때까지 여기서 기다립니다.
+        if self.ptt_thread and self.ptt_thread.is_alive():
+            print("   - 작별 인사가 끝날 때까지 화면을 유지합니다...")
+            self.ptt_thread.join() # PTT 스레드가 완전히 끝날 때까지 대기
+
         self.hotword_detector.stop()
-        pygame.quit()
+        pygame.quit() # PTT 스레드가 종료된 후에야 화면을 끔
         print("Face App 정상 종료")
 
-def run_face_app(emotion_q, hotword_q, stop_event, sleepy_event: threading.Event):
+# ▼▼▼ 3. run_face_app 함수 정의에 ptt_thread 인자 추가 ▼▼▼
+def run_face_app(emotion_q, hotword_q, stop_event, sleepy_event: threading.Event, ptt_thread: threading.Thread):
     try:
-        # RobotFaceApp 생성자에 sleepy_event 전달
         app = RobotFaceApp(
             emotion_queue=emotion_q, 
             hotword_queue=hotword_q, 
             stop_event=stop_event, 
-            sleepy_event=sleepy_event
+            sleepy_event=sleepy_event,
+            ptt_thread=ptt_thread # 클래스 생성자에 ptt_thread 전달
         )
         app.run()
     except Exception as e:
