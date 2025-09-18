@@ -4,6 +4,7 @@ import os
 import threading
 import platform
 import queue
+import time
 from . import config as C, dxl_io as io, suppress
 from dynamixel_sdk import PortHandler, PacketHandler
 # landmark_pb2와 drawing_utils는 이제 직접 사용하지 않으므로 import 순서를 조정하거나 그대로 두어도 무방합니다.
@@ -85,7 +86,9 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
     print(f"▶ 카메라({camera_index})를 여는 중입니다...")
-    cap = cv2.VideoCapture(camera_index, cv2.CAP_ANY)
+    # [수정 1] Windows에서 안정적인 카메라 연결을 위해 CAP_DSHOW 사용
+    cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
+    
     if not cap.isOpened():
         print(f"⚠️ 카메라({camera_index}) 열기 실패")
         landmarker.close(); return
@@ -94,7 +97,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
-    frame_timestamp_ms = 0
     last_mode = shared_state.get('mode', 'tracking')
 
     try:
@@ -113,7 +115,9 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             cx, cy = w // 2, h // 2
 
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            frame_timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
+            
+            # [수정 2] 불안정한 카메라 시간 대신 시스템 시간으로 안정적인 타임스탬프 생성
+            frame_timestamp_ms = int(time.perf_counter() * 1000)
             res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
             
             current_mode = shared_state.get('mode', 'tracking')
@@ -135,7 +139,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             if current_mode == 'tracking':
                 if not sleepy_event.is_set():
                     if res.face_landmarks:
-                        # ... (기존 추적 로직은 동일)
                         lm = res.face_landmarks[0][1]
                         nx, ny = int(lm.x * w), int(lm.y * h)
                         off_x = int(io.clamp(nx - cx, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
@@ -154,7 +157,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     cv2.putText(frame, "Mode: Tracking (Sleepy)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
 
             elif current_mode == 'counting':
-                # ... (기존 계수 로직은 동일)
                 left_count, right_count = 0, 0
                 if res.face_landmarks:
                     for face_landmark_list in res.face_landmarks:
@@ -176,23 +178,16 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                 cv2.putText(frame, total_text, (text_pos_x, text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
                 cv2.putText(frame, "Mode: Counting", (10, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
 
-            # ▼▼▼▼▼ 1. Landmark Mesh 대신 Bounding Box 그리기 ▼▼▼▼▼
             if draw_mesh and res.face_landmarks:
                 for landmark_list in res.face_landmarks:
-                    # 모든 랜드마크에서 min/max x, y 좌표를 찾아 사각형의 범위를 계산합니다.
                     x_min = min([landmark.x for landmark in landmark_list])
                     y_min = min([landmark.y for landmark in landmark_list])
                     x_max = max([landmark.x for landmark in landmark_list])
                     y_max = max([landmark.y for landmark in landmark_list])
-
-                    # 정규화된 좌표를 실제 픽셀 좌표로 변환합니다.
                     start_point = (int(x_min * w), int(y_min * h))
                     end_point = (int(x_max * w), int(y_max * h))
-
-                    # 사각형을 그립니다. (녹색, 두께 2)
                     cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-
+            
             _publish_frame(frame)
 
     finally:
