@@ -176,23 +176,12 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                                 connection_drawing_spec=drawing_spec)
                         # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-            if _IS_DARWIN:
-                _publish_frame(frame)
-            else:
-                if draw_in_worker:
-                    cv2.imshow("Auto-Track Face Center", frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == 27:
-                        stop_event.set(); break
+            _publish_frame(frame)
 
     finally:
         try: cap.release()
         except Exception: pass
-        try:
-            if (not _IS_DARWIN) and draw_in_worker:
-                cv2.destroyAllWindows()
-        except Exception:
-            pass
+        
         landmarker.close() # landmarker 객체를 닫아줍니다.
 
 def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Auto-Track Face Center"):
