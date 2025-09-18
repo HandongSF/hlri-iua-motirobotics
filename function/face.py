@@ -1,21 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
-
 # mk2/face.py
 from __future__ import annotations
 import os
@@ -24,19 +6,17 @@ import platform
 import queue
 from . import config as C, dxl_io as io, suppress
 from dynamixel_sdk import PortHandler, PacketHandler
+# landmark_pb2와 drawing_utils는 이제 직접 사용하지 않으므로 import 순서를 조정하거나 그대로 두어도 무방합니다.
+from mediapipe.framework.formats import landmark_pb2
 
-# ▼▼▼▼▼ MediaPipe의 최신 Tasks API를 사용하기 위해 추가 ▼▼▼▼▼
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 _IS_DARWIN = (platform.system() == "Darwin")
 
-# 추적 방향 부호 (기본값 -1 = 기존 pan_pos -= delta 와 동일)
-PAN_SIGN  = int(os.getenv("PAN_SIGN",  "-1"))
+PAN_SIGN  = int(os.getenv("PAN_SIGN",  "1"))
 TILT_SIGN = int(os.getenv("TILT_SIGN", "-1"))
 
-# 메인스레드 렌더용 프레임 버스 (마지막 프레임만 유지)
 _DISPLAY_Q: "queue.Queue" = queue.Queue(maxsize=1)
 
 def _publish_frame(frame):
@@ -57,43 +37,38 @@ def _as_int(v, default=None):
         return default
 
 def _can_show_window_in_this_thread() -> bool:
-    # macOS는 메인스레드만 HighGUI 허용
     return not (_IS_DARWIN and threading.current_thread() is not threading.main_thread())
 
 def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.Lock,
                         stop_event: threading.Event, video_frame_q: queue.Queue,
                         sleepy_event: threading.Event,
+                        shared_state: dict,
                         camera_index: int = 1,
                         draw_mesh: bool = True,
                         print_debug: bool = True):
 
     cv2, mp = suppress.import_cv2_mp()
 
-    # ▼▼▼▼▼ Face Mesh를 최신 FaceLandmarker API로 변경 ▼▼▼▼▼
-    # 모델 파일 경로 설정 (MediaPipe가 이제 모델을 자동으로 다운로드/관리하므로 파일 경로 대신 이름만 사용)
-    model_asset_path = 'models/face_landmarker.task' # 경로를 models/로 지정
+    model_asset_path = 'models/face_landmarker.task'
 
     try:
-        # FaceLandmarker 옵션 설정
         base_options = python.BaseOptions(model_asset_path=model_asset_path)
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
-            running_mode=vision.RunningMode.VIDEO, # 비디오 스트림 처리에 최적화
-            num_faces=1,
+            running_mode=vision.RunningMode.VIDEO,
+            num_faces=20,
             min_face_detection_confidence=0.5,
             min_face_presence_confidence=0.5,
             min_tracking_confidence=0.5,
             output_face_blendshapes=False,
             output_facial_transformation_matrixes=False
         )
-        # FaceLandmarker 객체 생성
         landmarker = vision.FaceLandmarker.create_from_options(options)
         print("✅ 최신 FaceLandmarker 모델 로딩 완료.")
 
     except Exception as e:
         print(f"❌ FaceLandmarker 모델 로딩 실패: {e}")
         return
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     def read_pos(dxl_id: int) -> int:
         v = io.read_present_position(pkt, port, lock, dxl_id)
@@ -102,93 +77,131 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             v = (C.SERVO_MIN + C.SERVO_MAX) // 2
         return v
 
-    pan_pos  = read_pos(C.PAN_ID)
-    tilt_pos = read_pos(C.TILT_ID)
+    home_pan_pos = read_pos(C.PAN_ID)
+    home_tilt_pos = read_pos(C.TILT_ID)
+    pan_pos  = home_pan_pos
+    tilt_pos = home_tilt_pos
     if print_debug:
-        print(f"▶ Initial pan={pan_pos}, tilt={tilt_pos}")
+        print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
-    draw_utils   = mp.solutions.drawing_utils
-    drawing_spec = draw_utils.DrawingSpec(color=(0,255,0), thickness=1, circle_radius=1)
-
+    print(f"▶ 카메라({camera_index})를 여는 중입니다...")
     cap = cv2.VideoCapture(camera_index, cv2.CAP_ANY)
     if not cap.isOpened():
         print(f"⚠️ 카메라({camera_index}) 열기 실패")
         landmarker.close(); return
-
-    worker_can_show = _can_show_window_in_this_thread()
-    draw_in_worker  = (draw_mesh and worker_can_show)
+    print(f"✅ 카메라({camera_index})가 성공적으로 열렸습니다.")
     
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
     frame_timestamp_ms = 0
+    last_mode = shared_state.get('mode', 'tracking')
 
     try:
         while not stop_event.is_set():
             ok, frame = cap.read()
             if not ok: break
 
+            frame = cv2.flip(frame, 1)
+
             try:
                 if not video_frame_q.full():
                     video_frame_q.put_nowait(frame.copy())
-            except Exception:
-                pass
+            except Exception: pass
+            
+            h, w = frame.shape[:2]
+            cx, cy = w // 2, h // 2
 
-            if not sleepy_event.is_set():
-                h, w = frame.shape[:2]
-                cx, cy = w // 2, h // 2
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            frame_timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
+            res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
+            
+            current_mode = shared_state.get('mode', 'tracking')
 
-                # ▼▼▼▼▼ 이미지 처리 및 랜드마크 감지 로직 변경 ▼▼▼▼▼
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                
-                frame_timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
-                res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
-                
-                if res.face_landmarks:
-                    # 첫 번째 얼굴의 코끝(landmark[1]) 좌표를 가져옵니다.
-                    lm = res.face_landmarks[0][1]
-                    nx, ny = int(lm.x * w), int(lm.y * h)
-                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-
-                    off_x = int(io.clamp(nx - cx, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
-                    off_y = int(io.clamp(cy - ny, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
-
-                    pan_delta  = 0 if abs(off_x) < C.DEAD_ZONE else max(1, int(abs(off_x * C.KP_PAN)))  * (1 if off_x > 0 else -1)
-                    tilt_delta = 0 if abs(off_y) < C.DEAD_ZONE else max(1, int(abs(off_y * C.KP_TILT))) * (1 if off_y > 0 else -1)
-
-                    pan_pos  = int(io.clamp(pan_pos  + PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
-                    tilt_pos = int(io.clamp(tilt_pos + TILT_SIGN * tilt_delta, C.SERVO_MIN, C.SERVO_MAX))
-
+            if current_mode != last_mode:
+                if current_mode == 'counting':
+                    print("▶ Mode changed to Counting: Resetting motor position.")
+                    pan_pos, tilt_pos = home_pan_pos, home_tilt_pos
                     with lock:
-                        io.write4(pkt, port, C.PAN_ID,  C.ADDR_GOAL_POSITION, pan_pos)
+                        io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, pan_pos)
                         io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
+                
+                elif current_mode == 'tracking':
+                    print("▶ Mode changed to Tracking: Re-reading current motor position.")
+                    pan_pos = read_pos(C.PAN_ID)
+                    tilt_pos = read_pos(C.TILT_ID)
+            last_mode = current_mode
 
-                    # 시각화
-                    cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
-                    cv2.circle(frame, (nx, ny), 5, (0, 0, 255), -1)
-                    cv2.putText(frame, f"Off X:{off_x:+d} Y:{off_y:+d}",
-                                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,255), 2)
-                    if draw_mesh:
-                        # ▼▼▼▼▼ 랜드마크 그리기 로직 변경 ▼▼▼▼▼
-                        for face_landmark_list in res.face_landmarks:
-                            draw_utils.draw_landmarks(
-                                image=frame,
-                                landmark_list=face_landmark_list,
-                                connections=mp.solutions.face_mesh.FACEMESH_TESSELATION,
-                                landmark_drawing_spec=drawing_spec,
-                                connection_drawing_spec=drawing_spec)
-                        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            if current_mode == 'tracking':
+                if not sleepy_event.is_set():
+                    if res.face_landmarks:
+                        # ... (기존 추적 로직은 동일)
+                        lm = res.face_landmarks[0][1]
+                        nx, ny = int(lm.x * w), int(lm.y * h)
+                        off_x = int(io.clamp(nx - cx, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
+                        off_y = int(io.clamp(cy - ny, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
+                        pan_delta  = 0 if abs(off_x) < C.DEAD_ZONE else max(1, int(abs(off_x * C.KP_PAN)))  * (1 if off_x > 0 else -1)
+                        tilt_delta = 0 if abs(off_y) < C.DEAD_ZONE else max(1, int(abs(off_y * C.KP_TILT))) * (1 if off_y > 0 else -1)
+                        pan_pos  = int(io.clamp(pan_pos  + PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
+                        tilt_pos = int(io.clamp(tilt_pos + TILT_SIGN * tilt_delta, C.SERVO_MIN, C.SERVO_MAX))
+                        with lock:
+                            io.write4(pkt, port, C.PAN_ID,  C.ADDR_GOAL_POSITION, pan_pos)
+                            io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
+                        cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
+                        cv2.circle(frame, (nx, ny), 5, (0, 0, 255), -1)
+                        cv2.putText(frame, "Mode: Tracking", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                else:
+                    cv2.putText(frame, "Mode: Tracking (Sleepy)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
+
+            elif current_mode == 'counting':
+                # ... (기존 계수 로직은 동일)
+                left_count, right_count = 0, 0
+                if res.face_landmarks:
+                    for face_landmark_list in res.face_landmarks:
+                        lm = face_landmark_list[1]
+                        nx = int(lm.x * w)
+                        if nx < cx: left_count += 1
+                        else: right_count += 1
+                
+                total_count = left_count + right_count
+                
+                cv2.line(frame, (cx, 0), (cx, h), (0, 255, 255), 2)
+                cv2.putText(frame, f"Left: {left_count}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 0), 3)
+                cv2.putText(frame, f"Right: {right_count}", (w - 220, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 0), 3)
+                
+                total_text = f"Total: {total_count}"
+                (text_w, text_h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)
+                text_pos_x = w - text_w - 20
+                text_pos_y = h - 30
+                cv2.putText(frame, total_text, (text_pos_x, text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+                cv2.putText(frame, "Mode: Counting", (10, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+
+            # ▼▼▼▼▼ 1. Landmark Mesh 대신 Bounding Box 그리기 ▼▼▼▼▼
+            if draw_mesh and res.face_landmarks:
+                for landmark_list in res.face_landmarks:
+                    # 모든 랜드마크에서 min/max x, y 좌표를 찾아 사각형의 범위를 계산합니다.
+                    x_min = min([landmark.x for landmark in landmark_list])
+                    y_min = min([landmark.y for landmark in landmark_list])
+                    x_max = max([landmark.x for landmark in landmark_list])
+                    y_max = max([landmark.y for landmark in landmark_list])
+
+                    # 정규화된 좌표를 실제 픽셀 좌표로 변환합니다.
+                    start_point = (int(x_min * w), int(y_min * h))
+                    end_point = (int(x_max * w), int(y_max * h))
+
+                    # 사각형을 그립니다. (녹색, 두께 2)
+                    cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             _publish_frame(frame)
 
     finally:
         try: cap.release()
         except Exception: pass
-        
-        landmarker.close() # landmarker 객체를 닫아줍니다.
+        landmarker.close()
 
-def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Auto-Track Face Center"):
-    """
-    macOS 전용: 메인 스레드에서 프레임 버스를 소비하며 imshow/waitKey 실행.
-    ESC(27)로 stop_event 세팅.
-    """
+def display_loop_main_thread(stop_event: threading.Event, shared_state: dict, window_name: str = "Auto-Track Face Center"):
+    # 이 함수는 변경사항이 없습니다.
     cv2, _ = suppress.import_cv2_mp()
     if not _can_show_window_in_this_thread():
         print("⚠️ display_loop_main_thread는 반드시 메인 스레드에서 호출해야 합니다.")
@@ -203,6 +216,13 @@ def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Au
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 stop_event.set(); break
+            elif key == ord('m'):
+                if shared_state.get('mode') == 'tracking':
+                    shared_state['mode'] = 'counting'
+                    print("✅ Mode changed to: [Counting]")
+                else:
+                    shared_state['mode'] = 'tracking'
+                    print("✅ Mode changed to: [Tracking]")
     finally:
         try: cv2.destroyAllWindows()
         except Exception: pass

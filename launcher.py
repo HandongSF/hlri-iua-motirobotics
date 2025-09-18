@@ -108,15 +108,14 @@ def main():
     port, pkt = _open_port()
     dxl_lock = threading.Lock()
     stop_event = threading.Event()
-
     emotion_queue = queue.Queue()
     hotword_queue = queue.Queue()
-    
     rps_command_q = multiprocessing.Queue()
     rps_result_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
-    
     sleepy_event = threading.Event()
+
+    shared_state = {'mode': 'tracking'}
     
     def _handle_sigint(sig, frame):
         print("\n🛑 SIGINT(Ctrl+C) 감지 → 종료 신호 보냄")
@@ -137,8 +136,8 @@ def main():
 
     t_face = threading.Thread(
         target=F.face_tracker_worker,
-        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event),
-        kwargs=dict(camera_index=cam_index, draw_mesh=False, print_debug=True),
+        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event, shared_state), # args에 shared_state 추가
+        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True), # draw_mesh를 True로 변경하여 시각화 활성화
         name="face", daemon=True)
 
     start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
@@ -180,7 +179,7 @@ def main():
     print("▶ Wheel 제어 스레드 시작")
 
     try:
-        F.display_loop_main_thread(stop_event, window_name="Camera Feed (on Laptop)")
+        F.display_loop_main_thread(stop_event, shared_state, window_name="Camera Feed (on Laptop)")
 
     except KeyboardInterrupt:
         print("\n🛑 KeyboardInterrupt 감지 → 종료 신호 보냄")
