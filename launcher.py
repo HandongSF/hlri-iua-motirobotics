@@ -161,6 +161,11 @@ def main():
         target=rock_paper_game_worker,
         args=(rps_command_q, rps_result_q, video_frame_q),
         name="rps_worker", daemon=True)
+    
+    t_wheels = threading.Thread(
+        target=W.wheel_loop,
+        args=(port, pkt, dxl_lock, stop_event),
+        name="wheels", daemon=True)
 
     t_face.start()
     print(f"▶ FaceTracker 시작 (camera_index={cam_index})")
@@ -171,11 +176,12 @@ def main():
     t_rps_worker.start() 
     print("▶ 가위바위보 게임 스레드 시작")
 
+    t_wheels.start()
+    print("▶ Wheel 제어 스레드 시작")
+
     try:
-        if platform.system() == "Darwin":
-            F.display_loop_main_thread(stop_event)
-        else:
-            W.wheel_loop(port, pkt, dxl_lock, stop_event)
+        F.display_loop_main_thread(stop_event, window_name="Camera Feed (on Laptop)")
+
     except KeyboardInterrupt:
         print("\n🛑 KeyboardInterrupt 감지 → 종료 신호 보냄")
         stop_event.set()
@@ -188,9 +194,10 @@ def main():
         t_visual_face.join(timeout=15.0) # PTT를 기다릴 수 있으므로 시간 여유
         t_face.join(timeout=3.0)
         t_rps_worker.join(timeout=5.0)
+        t_wheels.join(timeout=3.0)
         
         _graceful_shutdown(port, pkt, dxl_lock)
         print("■ launcher 정상 종료")
 
-if __name__ == "__main__":
+if __name__ == "__main__":                                     
     main()
