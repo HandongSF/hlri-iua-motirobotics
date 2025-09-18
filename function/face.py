@@ -25,6 +25,11 @@ import queue
 from . import config as C, dxl_io as io, suppress
 from dynamixel_sdk import PortHandler, PacketHandler
 
+# ▼▼▼▼▼ MediaPipe의 최신 Tasks API를 사용하기 위해 추가 ▼▼▼▼▼
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 _IS_DARWIN = (platform.system() == "Darwin")
 
 # 추적 방향 부호 (기본값 -1 = 기존 pan_pos -= delta 와 동일)
@@ -57,12 +62,39 @@ def _can_show_window_in_this_thread() -> bool:
 
 def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.Lock,
                         stop_event: threading.Event, video_frame_q: queue.Queue,
-                        sleepy_event: threading.Event, 
+                        sleepy_event: threading.Event,
                         camera_index: int = 1,
                         draw_mesh: bool = True,
                         print_debug: bool = True):
-    
+
     cv2, mp = suppress.import_cv2_mp()
+
+    # ▼▼▼▼▼ Face Mesh를 최신 FaceLandmarker API로 변경 ▼▼▼▼▼
+    # 모델 파일 경로 설정 (MediaPipe가 이제 모델을 자동으로 다운로드/관리하므로 파일 경로 대신 이름만 사용)
+    model_asset_path = 'models/face_landmarker.task' # 경로를 models/로 지정
+
+    try:
+        # FaceLandmarker 옵션 설정
+        base_options = python.BaseOptions(model_asset_path=model_asset_path)
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.VIDEO, # 비디오 스트림 처리에 최적화
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+            output_face_blendshapes=False,
+            output_facial_transformation_matrixes=False
+        )
+        # FaceLandmarker 객체 생성
+        landmarker = vision.FaceLandmarker.create_from_options(options)
+        print("✅ 최신 FaceLandmarker 모델 로딩 완료.")
+
+    except Exception as e:
+        print(f"❌ FaceLandmarker 모델 로딩 실패: {e}")
+        print("   'pip install mediapipe==0.10.11' 또는 최신 버전으로 설치했는지 확인하세요.")
+        return
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     def read_pos(dxl_id: int) -> int:
         v = io.read_present_position(pkt, port, lock, dxl_id)
@@ -76,20 +108,18 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     if print_debug:
         print(f"▶ Initial pan={pan_pos}, tilt={tilt_pos}")
 
-    mesh = mp.solutions.face_mesh.FaceMesh(
-        static_image_mode=False, max_num_faces=1, refine_landmarks=True,
-        min_detection_confidence=0.5, min_tracking_confidence=0.5
-    )
     draw_utils   = mp.solutions.drawing_utils
     drawing_spec = draw_utils.DrawingSpec(color=(0,255,0), thickness=1, circle_radius=1)
 
     cap = cv2.VideoCapture(camera_index, cv2.CAP_ANY)
     if not cap.isOpened():
         print(f"⚠️ 카메라({camera_index}) 열기 실패")
-        mesh.close(); return
+        landmarker.close(); return
 
     worker_can_show = _can_show_window_in_this_thread()
     draw_in_worker  = (draw_mesh and worker_can_show)
+    
+    frame_timestamp_ms = 0
 
     try:
         while not stop_event.is_set():
@@ -102,18 +132,21 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             except Exception:
                 pass
 
-            # ▼▼▼ 2. 'Sleepy' 모드일 경우 얼굴 추적 로직을 건너뛰도록 수정 ▼▼▼
-            # sleepy_event가 set() 상태가 아니어야 얼굴 추적을 수행합니다.
             if not sleepy_event.is_set():
                 h, w = frame.shape[:2]
                 cx, cy = w // 2, h // 2
 
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                res = mesh.process(rgb)
-
-                if res.multi_face_landmarks:
-                    lm = res.multi_face_landmarks[0].landmark[1]  # nose tip
+                # ▼▼▼▼▼ 이미지 처리 및 랜드마크 감지 로직 변경 ▼▼▼▼▼
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                
+                frame_timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
+                res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
+                
+                if res.face_landmarks:
+                    # 첫 번째 얼굴의 코끝(landmark[1]) 좌표를 가져옵니다.
+                    lm = res.face_landmarks[0][1]
                     nx, ny = int(lm.x * w), int(lm.y * h)
+                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
                     off_x = int(io.clamp(nx - cx, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
                     off_y = int(io.clamp(cy - ny, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
@@ -134,10 +167,15 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     cv2.putText(frame, f"Off X:{off_x:+d} Y:{off_y:+d}",
                                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,255,255), 2)
                     if draw_mesh:
-                        draw_utils.draw_landmarks(
-                            frame, res.multi_face_landmarks[0],
-                            mp.solutions.face_mesh.FACEMESH_TESSELATION, drawing_spec, drawing_spec
-                        )
+                        # ▼▼▼▼▼ 랜드마크 그리기 로직 변경 ▼▼▼▼▼
+                        for face_landmark_list in res.face_landmarks:
+                            draw_utils.draw_landmarks(
+                                image=frame,
+                                landmark_list=face_landmark_list,
+                                connections=mp.solutions.face_mesh.FACEMESH_TESSELATION,
+                                landmark_drawing_spec=drawing_spec,
+                                connection_drawing_spec=drawing_spec)
+                        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             if _IS_DARWIN:
                 _publish_frame(frame)
@@ -156,7 +194,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                 cv2.destroyAllWindows()
         except Exception:
             pass
-        mesh.close()
+        landmarker.close() # landmarker 객체를 닫아줍니다.
 
 def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Auto-Track Face Center"):
     """
