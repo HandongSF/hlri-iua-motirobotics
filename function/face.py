@@ -92,7 +92,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
 
     except Exception as e:
         print(f"❌ FaceLandmarker 모델 로딩 실패: {e}")
-        print("   'pip install mediapipe==0.10.11' 또는 최신 버전으로 설치했는지 확인하세요.")
         return
     # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
