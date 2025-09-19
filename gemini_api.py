@@ -80,7 +80,7 @@ def keep_awake(func: Callable):
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash-lite")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 PROMPT_TEXT = (
     "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
     " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
@@ -141,6 +141,11 @@ class SapiTTSWorker:
         text = data if isinstance(data, str) else data.get("text", "")
         print(f"🔊 TTS enqueue ({len(text)} chars)")
         self._q.put(data)
+    
+    def wait(self):
+        """TTS 큐의 모든 작업이 완료될 때까지 기다립니다."""
+        self._q.join()
+
     def close_and_join(self, drain: bool = True, timeout: float = 15.0):
         try:
             if drain:
@@ -216,7 +221,9 @@ class SapiTTSWorker:
                         text = item
 
                     if text:
-                        print("🔈 TTS speaking..."); voice.Speak(text); print("✅ TTS done")
+                        print("🔈 TTS speaking..."); 
+                        voice.Speak(text); 
+                        print("✅ TTS done")
 
                 finally:
                     voice.Rate = default_rate
@@ -240,6 +247,11 @@ class TypecastTTSWorker:
         text = data if isinstance(data, str) else data.get("text", "")
         print(f"🔊 TTS enqueue ({len(text)} chars)")
         self._q.put(data)
+
+    def wait(self):
+        """TTS 큐의 모든 작업이 완료될 때까지 기다립니다."""
+        self._q.join()
+
     def close_and_join(self, drain: bool = True, timeout: float = 30.0):
         try:
             if drain: self._q.join()
@@ -314,7 +326,9 @@ class PressToTalk:
                  stop_event: Optional[threading.Event] = None,
                  rps_command_q: Optional[multiprocessing.Queue] = None,
                  rps_result_q: Optional[multiprocessing.Queue] = None,
-                 sleepy_event: Optional[threading.Event] = None):
+                 sleepy_event: Optional[threading.Event] = None,
+                 shared_state: Optional[dict] = None,
+                 ox_command_q: Optional[multiprocessing.Queue] = None):
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -323,19 +337,21 @@ class PressToTalk:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel(MODEL_NAME)
         self.chat = genai.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_INSTRUCTION).start_chat(history=[])
+
         self.router_model = genai.GenerativeModel(
             MODEL_NAME,
             system_instruction=(
                 "너는 명령 라우터다. 한국어 문장을 보고 의도를 분류한다. "
                 "dance=사용자가 실제로 춤을 '시작하라고' 명령/요청/승인. "
                 "game=가위바위보 게임을 시작하자는 요청. "
+                "ox_quiz=얼굴 인식 OX 퀴즈 게임을 시작하자는 요청. "
                 "joke=개그나 농담을 해달라는 명확한 요청. "  # "joke" 의도 정의 추가
                 "stop=춤을 '멈추라'는 명령/요청/승인. "
                 "chat=일반 대화(질문/잡담/설명/감정표현/춤에 대한 견해·가정적 질문 포함). "
                 "부정/금지/거절 표현(예:'춤 추지 마','춤은 안돼','그만두지 말고 계속')은 정확히 반영하라. "
                 "오직 아래 JSON만 출력:\n"
-                '{ "intent": "dance|stop|game|chat|joke", "normalized_text": "<의미만 보존한 간결한 문장>", '
-                '"speakable_reply": "<의도가 chat일 때 1~2문장 공감형 짧은 답변. dance/stop/game/joke이면 빈 문자열>" }'
+                '{ "intent": "dance|stop|game|ox_quiz|chat|joke", "normalized_text": "<의미만 보존한 간결한 문장>", '
+                '"speakable_reply": "<의도가 chat일 때 1~2문장 공감형 짧은 답변. dance/stop/game/joke/ox_quiz이면 빈 문자열>" }'
             ),
             generation_config={"response_mime_type": "application/json", "temperature": 0.2}
         )
@@ -352,6 +368,7 @@ class PressToTalk:
 
         self.rps_command_q = rps_command_q
         self.rps_result_q  = rps_result_q
+        self.ox_command_q = ox_command_q
         self.busy_lock = threading.Lock()
         self.busy_signals = 0
         self.background_keep_alive_thread = None
@@ -371,15 +388,17 @@ class PressToTalk:
             if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
 
         self.sleepy_event = sleepy_event
+        self.shared_state = shared_state
+
         if self.sleepy_event:
             self.snoring_thread = threading.Thread(target=self._snoring_worker, daemon=True)
             self.snoring_thread.start()
-
+        
     def _print_intro(self):
         print("\n=== Gemini PTT (통합 버전) ===")
         print("▶ '안녕 모티'로 호출(SLEEPY 상태) → 스페이스바로 대화(NEUTRAL 상태) → ESC로 종료")
         print("▶ [User ] 전사 결과 / [Gemini] 모델 답변")
-        print("▶ 키워드: '춤' → 댄스 시작 / '그만' → 댄스 정지 / '가위바위보' → 게임 시작")
+        print("▶ 키워드: '춤' → 댄스 시작 / '그만' → 댄스 정지 / '가위바위보' → 게임 시작 / 'OX 게임")
         print(f"▶ MODEL={MODEL_NAME}, SR={SAMPLE_RATE}Hz")
         v_id, out_desc = getattr(self.tts, "voice_id", None), getattr(self.tts, "output_device_desc", None)
         if v_id: print(f"▶ TTS Voice : {v_id}")
@@ -474,7 +493,7 @@ class PressToTalk:
             raw = _extract_text(resp); data = json.loads(raw)
             if not isinstance(data, dict): raise ValueError("router JSON is not a dict")
             intent = data.get("intent", "chat")
-            if intent not in ("dance", "stop", "game", "chat", "joke"): intent = "chat"
+            if intent not in ("dance", "stop", "game", "chat", "joke", "ox_quiz"): intent = "chat"
             return {"intent": intent, "normalized_text": str(data.get("normalized_text", text)), "speakable_reply": str(data.get("speakable_reply", "")) if intent == "chat" else ""}
         except Exception as e:
             print(f"(router 폴백) {e}")
@@ -483,6 +502,7 @@ class PressToTalk:
             if "그만" in text: return {"intent": "stop", "normalized_text": text, "speakable_reply": ""}
             if "춤" in text: return {"intent": "dance", "normalized_text": text, "speakable_reply": ""}
             if any(w in low for w in ["농담", "개그"]): return {"intent": "joke", "normalized_text": text, "speakable_reply": ""}
+            if "ox 퀴즈" in low or "ox게임" in low or "ox 게임" in low: return {"intent": "ox_quiz", "normalized_text": text, "speakable_reply": ""}
             if any(w in low for w in ["가위바위보", "게임"]): return {"intent": "game", "normalized_text": text, "speakable_reply": ""}
             return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
     
@@ -580,7 +600,92 @@ class PressToTalk:
                     if self.emotion_queue: self.emotion_queue.put("HAPPY")
                 finally:
                     self.lower_busy_signal()
+
+            elif intent == "ox_quiz":
+                print("💡 의도: OX QUIZ GAME (라운드 방식)")
+
+                if not self.shared_state or not self.ox_command_q:
+                    self.tts.speak("시스템 오류로 퀴즈를 진행할 수 없어요.")
+                    print("❌ shared_state 또는 ox_command_q가 없어 모드 전환 불가")
+                    return
                 
+                is_first_round = True
+                try:
+                    self.raise_busy_signal()
+                    self.shared_state['mode'] = 'ox_quiz'
+                    if self.emotion_queue: self.emotion_queue.put("THINKING")
+                    
+                    is_game_over = False
+                    while not is_game_over and not self.stop_event.is_set():
+                        # 1. Gemini를 통해 동적으로 퀴즈 생성
+                        quiz_prompt = (
+                            "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
+                            "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
+                            "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
+                            '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
+                        )
+                        quiz_data = None
+                        try:
+                            quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
+                                quiz_prompt, 
+                                generation_config={"response_mime_type": "application/json"}
+                            )
+                            raw_json = _extract_text(quiz_response)
+                            quiz_data = json.loads(raw_json)
+                            print(f"  - 생성된 퀴즈: {quiz_data}")
+                        except Exception as e:
+                            print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
+                            quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
+
+                        # 2. 사용자에게 퀴즈 문제와 안내 음성 출력
+                        if is_first_round:
+                            self.tts.speak("OX 퀴즈를 시작합니다!")
+                        else:
+                            self.tts.speak("자, 다음 문제입니다!")
+                        
+                        self.tts.speak(quiz_data["question"])
+                        self.tts.wait()
+                        self.tts.speak("O는 오른쪽에, X는 왼쪽에 서주세요.")
+                        self.tts.speak("5! 4! 3!")
+                        self.tts.speak("2! 1!")
+                        self.tts.wait()
+
+                        # 3. 워커에게 정답과 함께 라운드 시작/진행 명령 전송
+                        command_to_send = {
+                            "command": "START_OX_QUIZ" if is_first_round else "NEXT_ROUND",
+                            "answer": quiz_data["answer"]
+                        }
+                        self.ox_command_q.put(command_to_send)
+                        is_first_round = False
+
+                        # 4. 워커로부터 결과 수신 대기 및 음성 출력
+                        try:
+                            round_result_msg = self.rps_result_q.get(timeout=35)
+                            print(f"OX 퀴즈 라운드 결과 수신: {round_result_msg}")
+                            self.tts.speak(round_result_msg)
+                            self.tts.wait()
+
+                            # 5. 게임 계속 여부 판단
+                            if "다음 문제" in round_result_msg or "살아남았습니다" in round_result_msg:
+                                time.sleep(2)
+                                continue
+                            else:
+                                is_game_over = True
+
+                        except queue.Empty:
+                            print("OX 퀴즈 시간 초과. 워커로부터 결과를 받지 못했습니다.")
+                            self.tts.speak("이런, 시간 안에 결과를 받지 못했어요. 게임을 종료합니다.")
+                            is_game_over = True
+                    
+                    model_text = "OX 퀴즈 게임 종료."
+
+                finally:
+                    if self.shared_state:
+                        self.shared_state['mode'] = 'tracking'
+                    self.lower_busy_signal()
+                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+                
+
             elif intent == "game":
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
                 try:
@@ -597,8 +702,9 @@ class PressToTalk:
                         
                         if callable(self.play_rps_motion_cb):
                             threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
-                        self.tts.speak("가위! 바위! 보!")
-                        
+                        self.tts.speak("가위! 바위!")
+                        self.tts.speak("보!")
+                        self.tts.wait()
                         game_result = ""
                         try:
                             game_result = self.rps_result_q.get(timeout=20)

@@ -50,6 +50,16 @@ class RockPaperGame:
         self.recognizer = vision.GestureRecognizer.create_from_options(options)
         print("✅ 가위바위보 제스처 모델 미리 로딩 완료.")
 
+        # 모델 예열(Warm-up)을 위해 가짜 이미지로 한 번 실행합니다.
+        try:
+            print("▶ 가위바위보 모델 예열 중...")
+            dummy_image = np.zeros((100, 100, 3), dtype=np.uint8)
+            dummy_mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=dummy_image)
+            self.recognizer.recognize(dummy_mp_image)
+            print("✅ 가위바위보 모델 예열 완료.")
+        except Exception as e:
+            print(f"⚠️ 모델 예열 중 오류 발생: {e}")
+
         # 최소 인식 점수 및 한국어 매핑
         self.MIN_CONFIDENCE_SCORE = 0.7
         self.KOREAN_CHOICES = {"Rock": "바위", "Paper": "보", "Scissors": "가위"}

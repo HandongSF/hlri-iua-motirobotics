@@ -42,6 +42,7 @@ from function import dxl_io as IO
 from gemini_api import PressToTalk
 from display.main import run_face_app
 from function.rock_paper import rock_paper_game_worker
+from function.ox_game import ox_quiz_game_worker
 
 def _get_env(name: str, default: str) -> str:
     v = os.environ.get(name)
@@ -83,7 +84,7 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event):
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -95,7 +96,9 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, ho
             stop_event=stop_event,
             rps_command_q=rps_command_q,
             rps_result_q=rps_result_q,
-            sleepy_event=sleepy_event
+            sleepy_event=sleepy_event,
+            shared_state=shared_state,
+            ox_command_q=ox_command_q 
         )
         app.run()
     except Exception as e: print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
@@ -112,9 +115,9 @@ def main():
     hotword_queue = queue.Queue()
     rps_command_q = multiprocessing.Queue()
     rps_result_q = multiprocessing.Queue()
+    ox_command_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
     sleepy_event = threading.Event()
-
     shared_state = {'mode': 'tracking'}
     
     def _handle_sigint(sig, frame):
@@ -136,7 +139,7 @@ def main():
 
     t_face = threading.Thread(
         target=F.face_tracker_worker,
-        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event, shared_state), # args에 shared_state 추가
+        args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event, shared_state),
         kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True), # draw_mesh를 True로 변경하여 시각화 활성화
         name="face", daemon=True)
 
@@ -147,7 +150,7 @@ def main():
     # PTT 스레드를 먼저 정의해야 얼굴 스레드에 넘겨줄 수 있습니다.
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event),
+        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q),
         name="ptt", daemon=True)
 
     # 얼굴 스레드에 t_ptt 객체를 마지막 인자로 전달합니다.
@@ -160,6 +163,11 @@ def main():
         target=rock_paper_game_worker,
         args=(rps_command_q, rps_result_q, video_frame_q),
         name="rps_worker", daemon=True)
+    
+    t_ox_worker = threading.Thread(
+        target=ox_quiz_game_worker,
+        args=(ox_command_q, rps_result_q, video_frame_q), 
+        name="ox_worker", daemon=True)
     
     t_wheels = threading.Thread(
         target=W.wheel_loop,
@@ -174,12 +182,13 @@ def main():
     print("▶ PTT App 스레드 시작")
     t_rps_worker.start() 
     print("▶ 가위바위보 게임 스레드 시작")
-
+    t_ox_worker.start()
+    print("▶ OX 퀴즈 게임 스레드 시작")
     t_wheels.start()
     print("▶ Wheel 제어 스레드 시작")
 
     try:
-        F.display_loop_main_thread(stop_event, shared_state, window_name="Camera Feed (on Laptop)")
+        F.display_loop_main_thread(stop_event, window_name="Camera Feed (on Laptop)")
 
     except KeyboardInterrupt:
         print("\n🛑 KeyboardInterrupt 감지 → 종료 신호 보냄")
@@ -193,6 +202,7 @@ def main():
         t_visual_face.join(timeout=15.0) # PTT를 기다릴 수 있으므로 시간 여유
         t_face.join(timeout=3.0)
         t_rps_worker.join(timeout=5.0)
+        t_ox_worker.join(timeout=5.0)
         t_wheels.join(timeout=3.0)
         
         _graceful_shutdown(port, pkt, dxl_lock)
