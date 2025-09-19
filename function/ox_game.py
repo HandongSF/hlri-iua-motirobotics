@@ -150,19 +150,21 @@ class OxQuizGame:
         print("▶ OX퀴즈(얼굴인식) 워커 대기 중...")
         while not self.stop_event.is_set():
             try:
-                command_data = self.command_q.get(timeout=1.0)
+                # 👈 get_nowait()으로 변경해서 기다리지 않고 바로 확인합니다.
+                command_data = self.command_q.get_nowait() 
 
-                # [변경] 딕셔너리 형태로 명령을 받도록 수정
                 if isinstance(command_data, dict) and command_data.get("command") == "START_OX_QUIZ":
                     initial_answer = command_data.get("answer")
                     if initial_answer in ["O", "X"]:
-                        # 게임 전체를 관리하는 새로운 메소드 호출
                         self._run_game_rounds(initial_answer)
                     else:
                         self.result_q.put("오류: 퀴즈의 정답('O' 또는 'X')이 지정되지 않았습니다.")
                 elif command_data == "STOP":
                     break
             except queue.Empty:
+                # 👈 큐가 비어있으면 오류 대신 이 부분이 실행됩니다.
+                # 0.1초만 쉬고 바로 while 루프의 처음으로 돌아갑니다.
+                time.sleep(0.1) 
                 continue
         
         if self.landmarker:
