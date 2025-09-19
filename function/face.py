@@ -1,4 +1,5 @@
-# mk2/face.py
+# function/face.py
+
 from __future__ import annotations
 import os
 import threading
@@ -7,9 +8,7 @@ import queue
 import time
 from . import config as C, dxl_io as io, suppress
 from dynamixel_sdk import PortHandler, PacketHandler
-# landmark_pb2와 drawing_utils는 이제 직접 사용하지 않으므로 import 순서를 조정하거나 그대로 두어도 무방합니다.
 from mediapipe.framework.formats import landmark_pb2
-
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
@@ -40,6 +39,7 @@ def _as_int(v, default=None):
 def _can_show_window_in_this_thread() -> bool:
     return not (_IS_DARWIN and threading.current_thread() is not threading.main_thread())
 
+# [수정] shared_state 파라미터를 다시 받도록 수정
 def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.Lock,
                         stop_event: threading.Event, video_frame_q: queue.Queue,
                         sleepy_event: threading.Event,
@@ -86,7 +86,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
     print(f"▶ 카메라({camera_index})를 여는 중입니다...")
-    # [수정 1] Windows에서 안정적인 카메라 연결을 위해 CAP_DSHOW 사용
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     
     if not cap.isOpened():
@@ -114,17 +113,17 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             h, w = frame.shape[:2]
             cx, cy = w // 2, h // 2
 
+            # mediapipe 처리를 위해 BGR -> RGB 변환
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             
-            # [수정 2] 불안정한 카메라 시간 대신 시스템 시간으로 안정적인 타임스탬프 생성
             frame_timestamp_ms = int(time.perf_counter() * 1000)
             res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
             
             current_mode = shared_state.get('mode', 'tracking')
 
             if current_mode != last_mode:
-                if current_mode == 'counting':
-                    print("▶ Mode changed to Counting: Resetting motor position.")
+                if current_mode == 'ox_quiz':
+                    print("▶ Mode changed to OX_QUIZ: Resetting motor position.")
                     pan_pos, tilt_pos = home_pan_pos, home_tilt_pos
                     with lock:
                         io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, pan_pos)
@@ -134,7 +133,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     print("▶ Mode changed to Tracking: Re-reading current motor position.")
                     pan_pos = read_pos(C.PAN_ID)
                     tilt_pos = read_pos(C.TILT_ID)
-            last_mode = current_mode
+                last_mode = current_mode
 
             if current_mode == 'tracking':
                 if not sleepy_event.is_set():
@@ -155,28 +154,39 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         cv2.putText(frame, "Mode: Tracking", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 else:
                     cv2.putText(frame, "Mode: Tracking (Sleepy)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
+            
+            # --- 수정된 부분 시작 ---
+            elif current_mode == 'ox_quiz':
 
-            elif current_mode == 'counting':
                 left_count, right_count = 0, 0
                 if res.face_landmarks:
-                    for face_landmark_list in res.face_landmarks:
-                        lm = face_landmark_list[1]
-                        nx = int(lm.x * w)
-                        if nx < cx: left_count += 1
-                        else: right_count += 1
+                    for face_landmarks in res.face_landmarks:
+                        nose_landmark = face_landmarks[1] # 코 위치 기준
+                        face_x_position = int(nose_landmark.x * w)
+                        if face_x_position < cx:
+                            left_count += 1
+                        else:
+                            right_count += 1
+
+                # 1. 화면 중앙에 흰색 세로선 그리기
+                cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 3)
+
+                # 2. 왼쪽 상단에 'X' 표시 (빨간색)
+                cv2.putText(frame, "X", (40, 80), cv2.FONT_HERSHEY_TRIPLEX, 3, (0, 0, 255), 7)
+                cv2.putText(frame, f": {left_count}", (160, 80), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 255), 7)
+
+                # 3. 오른쪽 상단에 'O' 표시 (초록색)
+                cv2.putText(frame, "O", (w - 250, 80), cv2.FONT_HERSHEY_TRIPLEX, 3, (0, 255, 0), 7)
+                cv2.putText(frame, f": {right_count}", (w - 130, 80), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 0), 7)
                 
-                total_count = left_count + right_count
-                
-                cv2.line(frame, (cx, 0), (cx, h), (0, 255, 255), 2)
-                cv2.putText(frame, f"Left: {left_count}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 0), 3)
-                cv2.putText(frame, f"Right: {right_count}", (w - 220, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 0), 3)
-                
-                total_text = f"Total: {total_count}"
-                (text_w, text_h), _ = cv2.getTextSize(total_text, cv2.FONT_HERSHEY_SIMPLEX, 1.5, 3)
-                text_pos_x = w - text_w - 20
-                text_pos_y = h - 30
-                cv2.putText(frame, total_text, (text_pos_x, text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
-                cv2.putText(frame, "Mode: Counting", (10, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+                # 4. 화면 하단에 총 인원 수 표시
+                total_faces = left_count + right_count
+                count_text = f"Total: {total_faces}"
+                text_size = cv2.getTextSize(count_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
+                text_x = w - text_size[0] - 20
+                text_y = h - 30
+                cv2.putText(frame, count_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+            # --- 수정된 부분 끝 ---
 
             if draw_mesh and res.face_landmarks:
                 for landmark_list in res.face_landmarks:
@@ -195,8 +205,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         except Exception: pass
         landmarker.close()
 
-def display_loop_main_thread(stop_event: threading.Event, shared_state: dict, window_name: str = "Auto-Track Face Center"):
-    # 이 함수는 변경사항이 없습니다.
+# display_loop는 shared_state를 직접 제어하지 않으므로 수정할 필요 없음
+def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Auto-Track Face Center"):
     cv2, _ = suppress.import_cv2_mp()
     if not _can_show_window_in_this_thread():
         print("⚠️ display_loop_main_thread는 반드시 메인 스레드에서 호출해야 합니다.")
@@ -209,15 +219,8 @@ def display_loop_main_thread(stop_event: threading.Event, shared_state: dict, wi
                 continue
             cv2.imshow(window_name, frame)
             key = cv2.waitKey(1) & 0xFF
-            if key == 27:
+            if key == 27: # ESC 키로 종료
                 stop_event.set(); break
-            elif key == ord('m'):
-                if shared_state.get('mode') == 'tracking':
-                    shared_state['mode'] = 'counting'
-                    print("✅ Mode changed to: [Counting]")
-                else:
-                    shared_state['mode'] = 'tracking'
-                    print("✅ Mode changed to: [Tracking]")
     finally:
         try: cv2.destroyAllWindows()
         except Exception: pass
