@@ -20,6 +20,8 @@
 import time, math, threading
 from dynamixel_sdk import PortHandler, PacketHandler
 from . import config as C, dxl_io as io
+from . import wheel
+import time
 
 _dance_event = threading.Event()
 _dance_thread = None
@@ -77,6 +79,45 @@ def start_dance(port: PortHandler, pkt: PacketHandler, lock, amp: int | None = N
         name="dancer", daemon=True
     )
     _dance_thread.start()
+    
+def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lock):
+    
+    # --- [안무 1단계] 몸 전체 왼쪽 회전 ---
+    print("🤖 [안무 1단계] 몸 전체 왼쪽 회전 시작!")
+    right_wheel_speed = -C.RIGHT_DIR * C.TURN_SPEED_UNITS
+    left_wheel_speed = C.LEFT_DIR * C.TURN_SPEED_UNITS
+    
+    wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, right_wheel_speed)
+    wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, left_wheel_speed)
+    time.sleep(1.0)
+    wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
+    wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
+    print("✅ [안무 1단계] 완료!")
+    time.sleep(0.5)
+
+    # --- [안무 2단계] 왼팔 들기 ---
+    print("🤖 [안무 2단계] 왼팔 들기 시작!")
+    with lock:
+        io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_VELOCITY, 300)
+        io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_UP_POS)
+    time.sleep(0.7)
+    print("✅ [안무 2단계] 완료!")
+    time.sleep(0.5)
+    
+    # --- [안무 3단계] 왼쪽 어깨 들었다 내리기 ---
+    print("🤖 [안무 3단계] 왼쪽 어깨 들기 시작!")
+    with lock:
+        io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_PROFILE_VELOCITY, 250)
+        io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_LEFT_POS)
+    time.sleep(0.5)
+    
+    with lock:
+        io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
+    time.sleep(0.5)
+    print("✅ [안무 3단계] 완료!")
+    time.sleep(0.5)
+    
+    print("🎉🎉 새로운 춤 동작 모두 완료! 🎉🎉")
 
 def stop_dance(port: PortHandler, pkt: PacketHandler, lock, return_home: bool = True, timeout: float = 2.0):
     global _dance_thread, _dance_origin_pos
@@ -92,3 +133,8 @@ def stop_dance(port: PortHandler, pkt: PacketHandler, lock, return_home: bool = 
         with lock:
             io.write4(pkt, port, C.DANCE_ID, C.ADDR_GOAL_POSITION, goal)
         print(f"↩️  DANCE return to origin: {goal}")
+        
+        
+# 새로운 춤 전체를 관리할 함수 
+def start_new_dance(port: PortHandler, pkt: PacketHandler, lock: threading.Lock):
+    threading.Thread(target=_new_dance_routine, args=(port, pkt, lock), daemon=True).start()

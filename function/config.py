@@ -115,3 +115,13 @@ EXTRA_POS_IDS = (DANCE_ID, AUX_ID, RPS_ARM_ID)
 
 DANCE_AMP = int(os.getenv("DANCE_AMP", "140"))
 DANCE_HZ  = float(os.getenv("DANCE_HZ",  "1.2"))
+
+# ---- 새로운 안무용 모터 ID ----
+LEFT_ARM_ID = 11
+SHOULDER_ID = 5
+
+# ---- 새로운 안무용 모터 위치 값 (필요시 조절) ----
+LEFT_ARM_UP_POS = 800      # 왼팔을 위로 번쩍 들었을 때의 위치 (예상 값)
+LEFT_ARM_READY_POS = 1352   # 왼팔의 기본 준비 자세 위치 (예상 값)
+SHOULDER_CENTER_POS = 2048  # 어깨의 중앙 위치 (기본값)
+SHOULDER_LEFT_POS = 2200    # 왼쪽으로 어깨를 들었을 때의 위치 (예상 값)
