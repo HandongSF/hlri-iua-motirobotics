@@ -329,7 +329,6 @@ class PressToTalk:
                  sleepy_event: Optional[threading.Event] = None,
                  shared_state: Optional[dict] = None,
                  ox_command_q: Optional[multiprocessing.Queue] = None,
-                 ox_result_q: Optional[multiprocessing.Queue] = None,
                  ):
         
         api_key = os.environ.get("GOOGLE_API_KEY")
@@ -371,7 +370,6 @@ class PressToTalk:
         self.rps_command_q = rps_command_q
         self.rps_result_q  = rps_result_q
         self.ox_command_q = ox_command_q
-        self.ox_result_q = ox_result_q
         self.busy_lock = threading.Lock()
         self.busy_signals = 0
         self.background_keep_alive_thread = None
@@ -679,51 +677,37 @@ class PressToTalk:
                         # 3. 워커에게 정답과 함께 라운드 시작/진행 명령 전송
                         command_to_send = {
                             "command": "START_OX_QUIZ" if is_first_round else "NEXT_ROUND",
-                            "answer": quiz_data["answer"]
+                            "answer": quiz_data["answer"],
+                            "is_predefined": is_predefined
                         }
                         self.ox_command_q.put(command_to_send)
                         is_first_round = False
 
                         # 4. 워커로부터 결과 수신 대기 및 음성 출력
                         try:
-                            round_result_data = self.ox_result_q.get(timeout=35)
-                            print(f"OX 퀴즈 라운드 결과 수신: {round_result_data}")
-
-                            status = round_result_data.get("status")
-                            winner_count = round_result_data.get("winner_count", 0)
-                            total_count = round_result_data.get("total_count", 0)
-
-                            # 대사 순서 1: 정답 발표
-                            self.tts.speak(f"정답은 {quiz_data['answer']} 였습니다!")
+                            round_result_msg = self.rps_result_q.get(timeout=35)
+                            print(f"OX 퀴즈 라운드 결과 수신: {round_result_msg}")
+                            self.tts.speak(round_result_msg)
                             self.tts.wait()
 
-                            # 대사 순서 2: 해설
-                            if quiz_data.get("explanation"):
+                            time.sleep(1) # A short pause for dramatic effect
+
+                            correct_answer_text = f"정답은 {quiz_data['answer']} 였습니다!"
+                            self.tts.speak(correct_answer_text)
+                            self.tts.wait()
+                            
+                            if is_predefined and quiz_data.get("explanation"):
+                                # If it's a predefined quiz with an explanation, speak it
                                 self.tts.speak(quiz_data["explanation"])
                                 self.tts.wait()
-                            
-                            time.sleep(1)
 
-                            # 대사 순서 3: 라운드 결과 (생존자/탈락자) 발표
-                            if status == "winners_exist":
-                                self.tts.speak(f"총 {total_count}명 중 {winner_count}명이 살아남았네요!")
-                            else:
-                                self.tts.speak(f"총 {total_count}명이 도전했지만, 아쉽게도 맞힌 분이 없어요.")
-                            self.tts.wait()
-
-                            # 대사 순서 4: 게임 계속 여부 판단 및 안내
-                            if is_predefined:
-                                self.tts.speak("연습 문제이니 다음으로 넘어갈게요!")
+                            # 5. 게임 계속 여부 판단
+                            if is_predefined or "살아남았습니다" in round_result_msg:
                                 time.sleep(2)
-                                continue # 연습 문제는 무조건 계속
-                            else: # 진짜 문제일 경우
-                                if status == "winners_exist":
-                                    self.tts.speak("다음 문제 갑니다!")
-                                    time.sleep(2)
-                                    continue
-                                else:
-                                    self.tts.speak("생존자가 없으므로 게임을 종료합니다. 다음에 또 도전해주세요!")
-                                    is_game_over = True
+                                
+                                continue
+                            else:
+                                is_game_over = True
 
                         except queue.Empty:
                             print("OX 퀴즈 시간 초과. 워커로부터 결과를 받지 못했습니다.")
