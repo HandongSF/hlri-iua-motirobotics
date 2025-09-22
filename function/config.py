@@ -77,10 +77,13 @@ PROTOCOL_VERSION = float(os.getenv("DXL_PROTO", "2.0"))
 # ---- 팬/틸트(Position) ----
 PAN_ID, TILT_ID = 2, 9
 SERVO_MIN, SERVO_MAX = 0, 4095
-KP_PAN, KP_TILT = 0.05, 0.05
+KP_PAN, KP_TILT = 0.2, 0.2       # ✅ P 게인 (엔진)
+KI_PAN, KI_TILT = 0.001, 0.001     # ✅ I 게인 (미세조정) - 이 부분이 누락되었을 수 있습니다.
+KD_PAN, KD_TILT = 0.15, 0.15       # ✅ D 게인 (브레이크)
 DEAD_ZONE = 50
 MAX_PIXEL_OFF = 200
 PROFILE_VELOCITY = 100
+MIN_MOVE_DELTA = 15
 
 # ---- 휠(Velocity) ----
 LEFT_ID, RIGHT_ID = 4, 3
