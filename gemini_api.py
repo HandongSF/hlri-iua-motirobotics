@@ -222,7 +222,7 @@ class SapiTTSWorker:
 
                     if text:
                         print("🔈 TTS speaking..."); 
-                        voice.Speak(text); 
+                        voice.Speak(text, 1); 
                         print("✅ TTS done")
 
                 finally:
@@ -328,7 +328,8 @@ class PressToTalk:
                  rps_result_q: Optional[multiprocessing.Queue] = None,
                  sleepy_event: Optional[threading.Event] = None,
                  shared_state: Optional[dict] = None,
-                 ox_command_q: Optional[multiprocessing.Queue] = None):
+                 ox_command_q: Optional[multiprocessing.Queue] = None,
+                 ):
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -609,6 +610,15 @@ class PressToTalk:
                     print("❌ shared_state 또는 ox_command_q가 없어 모드 전환 불가")
                     return
                 
+                predefined_quizzes = [
+                    {"question": "제 이름은 모터입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
+                    {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
+                    {"question": "모티는 춤을 출 수 있다", "answer": "O", "explanation": "춤 한번 보여드릴까요?"},
+                    {"question": "모티는 유튜버이다", "answer": "O", "explanation": "구독과 좋아요 알림 설정까지 꾸욱"},
+                    {"question": "모티는 농담을 잘한다", "answer": "O", "explanation": "제가 생각해도 그런 것 같아요! 언제든 '농담해줘'라고 말해보세요."}
+                ]
+                quiz_round_counter = 0
+
                 is_first_round = True
                 try:
                     self.raise_busy_signal()
@@ -617,25 +627,38 @@ class PressToTalk:
                     
                     is_game_over = False
                     while not is_game_over and not self.stop_event.is_set():
-                        # 1. Gemini를 통해 동적으로 퀴즈 생성
-                        quiz_prompt = (
-                            "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
-                            "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
-                            "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
-                            '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
-                        )
                         quiz_data = None
-                        try:
-                            quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
-                                quiz_prompt, 
-                                generation_config={"response_mime_type": "application/json"}
+                        is_predefined = False
+
+                        if quiz_round_counter < len(predefined_quizzes):
+                            # 사전 정의된 퀴즈 사용
+                            quiz_data = predefined_quizzes[quiz_round_counter]
+                            is_predefined = True 
+                            print(f"  - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
+                            quiz_round_counter += 1
+
+                        else:
+                            print("  - 사전 정의된 퀴즈 소진. Gemini API로 새 퀴즈를 생성합니다.")
+
+                            # 1. Gemini를 통해 동적으로 퀴즈 생성
+                            quiz_prompt = (
+                                "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
+                                "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
+                                "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
+                                '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
                             )
-                            raw_json = _extract_text(quiz_response)
-                            quiz_data = json.loads(raw_json)
-                            print(f"  - 생성된 퀴즈: {quiz_data}")
-                        except Exception as e:
-                            print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
-                            quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
+
+                            try:
+                                quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
+                                    quiz_prompt, 
+                                    generation_config={"response_mime_type": "application/json"}
+                                )
+                                raw_json = _extract_text(quiz_response)
+                                quiz_data = json.loads(raw_json)
+                                print(f"  - 생성된 퀴즈: {quiz_data}")
+                            except Exception as e:
+                                print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
+                                quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
 
                         # 2. 사용자에게 퀴즈 문제와 안내 음성 출력
                         if is_first_round:
@@ -646,6 +669,7 @@ class PressToTalk:
                         self.tts.speak(quiz_data["question"])
                         self.tts.wait()
                         self.tts.speak("O는 오른쪽에, X는 왼쪽에 서주세요.")
+                        self.tts.wait()
                         self.tts.speak("5! 4! 3!")
                         self.tts.speak("2! 1!")
                         self.tts.wait()
@@ -653,7 +677,8 @@ class PressToTalk:
                         # 3. 워커에게 정답과 함께 라운드 시작/진행 명령 전송
                         command_to_send = {
                             "command": "START_OX_QUIZ" if is_first_round else "NEXT_ROUND",
-                            "answer": quiz_data["answer"]
+                            "answer": quiz_data["answer"],
+                            "is_predefined": is_predefined
                         }
                         self.ox_command_q.put(command_to_send)
                         is_first_round = False
@@ -665,9 +690,21 @@ class PressToTalk:
                             self.tts.speak(round_result_msg)
                             self.tts.wait()
 
+                            time.sleep(1) # A short pause for dramatic effect
+
+                            correct_answer_text = f"정답은 {quiz_data['answer']} 였습니다!"
+                            self.tts.speak(correct_answer_text)
+                            self.tts.wait()
+                            
+                            if is_predefined and quiz_data.get("explanation"):
+                                # If it's a predefined quiz with an explanation, speak it
+                                self.tts.speak(quiz_data["explanation"])
+                                self.tts.wait()
+
                             # 5. 게임 계속 여부 판단
-                            if "다음 문제" in round_result_msg or "살아남았습니다" in round_result_msg:
+                            if is_predefined or "살아남았습니다" in round_result_msg:
                                 time.sleep(2)
+                                
                                 continue
                             else:
                                 is_game_over = True
@@ -698,13 +735,15 @@ class PressToTalk:
                         if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
                         self.rps_command_q.put("START_GAME")
                         self.tts.speak("준비하시고...")
-                        time.sleep(2) 
-                        
+                        self.tts.wait()
+
                         if callable(self.play_rps_motion_cb):
                             threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
+
                         self.tts.speak("가위! 바위!")
                         self.tts.speak("보!")
                         self.tts.wait()
+
                         game_result = ""
                         try:
                             game_result = self.rps_result_q.get(timeout=20)

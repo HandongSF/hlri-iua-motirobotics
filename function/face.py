@@ -98,6 +98,11 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
 
     last_mode = shared_state.get('mode', 'tracking')
 
+    last_error_pan = 0
+    last_error_tilt = 0
+    integral_pan = 0
+    integral_tilt = 0
+
     try:
         while not stop_event.is_set():
             ok, frame = cap.read()
@@ -140,15 +145,44 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     if res.face_landmarks:
                         lm = res.face_landmarks[0][1]
                         nx, ny = int(lm.x * w), int(lm.y * h)
-                        off_x = int(io.clamp(nx - cx, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
-                        off_y = int(io.clamp(cy - ny, -C.MAX_PIXEL_OFF, C.MAX_PIXEL_OFF))
-                        pan_delta  = 0 if abs(off_x) < C.DEAD_ZONE else max(1, int(abs(off_x * C.KP_PAN)))  * (1 if off_x > 0 else -1)
-                        tilt_delta = 0 if abs(off_y) < C.DEAD_ZONE else max(1, int(abs(off_y * C.KP_TILT))) * (1 if off_y > 0 else -1)
+
+                        error_pan = nx - cx
+                        error_tilt = cy - ny
+
+                        if abs(error_pan) > C.DEAD_ZONE or abs(error_tilt) > C.DEAD_ZONE:
+                            # 2. 오차 누적 (I Term)
+                            integral_pan += error_pan
+                            integral_tilt += error_tilt
+                            # I 값이 너무 커지는 것을 방지 (Integral Windup 방지)
+                            integral_pan = io.clamp(integral_pan, -200, 200)
+                            integral_tilt = io.clamp(integral_tilt, -200, 200)
+
+                            # 3. 오차의 변화량 계산 (D Term)
+                            derivative_pan = error_pan - last_error_pan
+                            derivative_tilt = error_tilt - last_error_tilt
+                            
+                            # 4. 최종 제어량 계산 = P + I + D
+                            pan_delta = (error_pan * C.KP_PAN) + (integral_pan * C.KI_PAN) + (derivative_pan * C.KD_PAN)
+                            tilt_delta = (error_tilt * C.KP_TILT) + (integral_tilt * C.KI_TILT) + (derivative_tilt * C.KD_TILT)
+                        else:
+                            pan_delta, tilt_delta = 0, 0
+                            # 목표에 도달하면 I값 초기화
+                            integral_pan, integral_tilt = 0, 0
+
+                        # 5. 다음 프레임을 위해 현재 오차를 '이전 오차'로 저장
+                        last_error_pan = error_pan
+                        last_error_tilt = error_tilt
+                        
+                        # 6. 최종 위치 업데이트
                         pan_pos  = int(io.clamp(pan_pos  + PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
                         tilt_pos = int(io.clamp(tilt_pos + TILT_SIGN * tilt_delta, C.SERVO_MIN, C.SERVO_MAX))
+
+                        # --- ✅ PID 제어 로직 끝 ---
+
                         with lock:
                             io.write4(pkt, port, C.PAN_ID,  C.ADDR_GOAL_POSITION, pan_pos)
                             io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
+                        
                         cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
                         cv2.circle(frame, (nx, ny), 5, (0, 0, 255), -1)
                         cv2.putText(frame, "Mode: Tracking", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)

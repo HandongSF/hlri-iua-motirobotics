@@ -101,11 +101,12 @@ class OxQuizGame:
         else:
             return {"status": "no_winners"}
 
-    def _run_game_rounds(self, first_answer: str):
+    def _run_game_rounds(self, first_answer: str, is_predefined: bool): # [수정] is_predefined 매개변수 추가
         """
         여러 라운드로 구성된 게임 전체를 관리하는 메인 루프.
         """
         current_answer = first_answer
+        current_is_predefined = is_predefined # 현재 라운드의 상태 저장
         round_num = 1
 
         while not self.stop_event.is_set():
@@ -113,34 +114,43 @@ class OxQuizGame:
             round_result = self._run_one_round(current_answer)
 
             # 2. 결과에 따라 분기 처리
-            if round_result["status"] == "winners_exist":
-                winner_count = round_result["winner_count"]
-                result_text = f"정답입니다! {winner_count}명이 살아남았습니다. 다음 문제 갑니다!"
+            # 정답자가 있거나, '사전 정의 퀴즈'인 경우에는 무조건 다음 라운드로 진행
+            if round_result["status"] == "winners_exist" or current_is_predefined:
+                winner_count = round_result.get("winner_count", 0)
+                
+                # 상태에 따라 다른 메시지를 보냄
+                if current_is_predefined:
+                    result_text = "모두 다음 문제로 넘어갑니다!"
+                else:
+                    result_text = f"{winner_count}명이 살아남았습니다."
+
                 print(f"✅ 라운드 {round_num} 결과: {result_text}")
                 self.result_q.put(result_text)
                 round_num += 1
 
-                # 3. 다음 문제와 정답을 기다림 (메인 프로세스에서 보내줄 때까지)
+                # 3. 다음 문제와 정답, 그리고 다음 라운드의 상태를 기다림
                 try:
-                    print("▶ 다음 문제의 정답을 기다립니다...")
-                    next_command = self.command_q.get(timeout=60.0) # 60초 타임아웃
+                    print("▶ 다음 문제의 정답과 상태를 기다립니다...")
+                    next_command = self.command_q.get(timeout=60.0)
                     
                     if isinstance(next_command, dict) and next_command.get("command") == "NEXT_ROUND":
                         current_answer = next_command.get("answer")
+                        # 다음 라운드의 is_predefined 상태를 업데이트
+                        current_is_predefined = next_command.get("is_predefined", False)
+
                         if current_answer not in ["O", "X"]:
                             self.result_q.put("오류: 다음 문제의 정답이 올바르지 않아 게임을 종료합니다.")
                             break
                     else:
-                        # "NEXT_ROUND"가 아니면 게임 종료
                         break
                 except queue.Empty:
                     self.result_q.put("시간 초과! 다음 문제가 없어 게임을 종료합니다.")
                     break
-            else: # 정답자가 없는 경우
-                result_text = "아쉽네요. 맞힌 분이 없어요. 다음에 다시 도전해주세요!"
+            else: # 정답자가 없고 '사전 정의 퀴즈'도 아닌 경우에만 게임 종료
+                result_text = "아쉽네요. 맞힌 분이 없어요."
                 print(f"✅ 라운드 {round_num} 결과: {result_text}")
                 self.result_q.put(result_text)
-                break # 게임 루프 탈출
+                break 
         
         print("🏁 OX 퀴즈 게임 세션 종료.")
 
@@ -155,8 +165,10 @@ class OxQuizGame:
 
                 if isinstance(command_data, dict) and command_data.get("command") == "START_OX_QUIZ":
                     initial_answer = command_data.get("answer")
+                    is_predefined = command_data.get("is_predefined", False)
+
                     if initial_answer in ["O", "X"]:
-                        self._run_game_rounds(initial_answer)
+                        self._run_game_rounds(initial_answer, is_predefined)
                     else:
                         self.result_q.put("오류: 퀴즈의 정답('O' 또는 'X')이 지정되지 않았습니다.")
                 elif command_data == "STOP":
