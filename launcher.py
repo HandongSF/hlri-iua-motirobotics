@@ -126,8 +126,7 @@ def main():
     signal.signal(signal.SIGINT, _handle_sigint)
 
     try:
-        I.init_pan_tilt_and_extras(port, pkt, dxl_lock)
-        I.init_wheels(port, pkt, dxl_lock)
+        I.initialize_robot(port, pkt, dxl_lock) # 👈 이 한 줄로 교체!
         print("▶ 초기화 완료: 팬/틸트 + 보조(Position), 휠(Velocity)")
     except Exception as e:
         print(f"❌ 초기화 실패: {e}")
@@ -143,7 +142,8 @@ def main():
         kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True), # draw_mesh를 True로 변경하여 시각화 활성화
         name="face", daemon=True)
 
-    start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
+    #start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
+    start_dance  = lambda: D.start_new_dance(port, pkt, dxl_lock)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
     play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
     
