@@ -101,58 +101,73 @@ class OxQuizGame:
         else:
             return {"status": "no_winners"}
 
-    def _run_game_rounds(self, first_answer: str, is_predefined: bool): # [수정] is_predefined 매개변수 추가
+    def _run_game_rounds(self, first_answer: str, is_predefined: bool):
         """
         여러 라운드로 구성된 게임 전체를 관리하는 메인 루프.
         """
         current_answer = first_answer
-        current_is_predefined = is_predefined # 현재 라운드의 상태 저장
+        current_is_predefined = is_predefined
         round_num = 1
 
         while not self.stop_event.is_set():
             # 1. 한 라운드 실행
             round_result = self._run_one_round(current_answer)
+            message = ""
+            winner_count = 0
 
-            # 2. 결과에 따라 분기 처리
-            # 정답자가 있거나, '사전 정의 퀴즈'인 경우에는 무조건 다음 라운드로 진행
+            # 2. 결과 분석 및 메시지 생성
             if round_result["status"] == "winners_exist" or current_is_predefined:
                 winner_count = round_result.get("winner_count", 0)
                 
-                # 상태에 따라 다른 메시지를 보냄
                 if current_is_predefined:
-                    result_text = "모두 다음 문제로 넘어갑니다!"
+                    message = "연습문제니까 모두 다음으로 넘어갈게요!"
+                elif winner_count == 1:
+                    message = "와! 최후의 1인이 결정되었습니다! 축하드립니다!"
                 else:
-                    result_text = f"{winner_count}명이 살아남았습니다."
+                    message = f"{winner_count}명이 살아남았습니다. 다음 문제 갑니다!"
+            else: # 정답자가 없는 경우
+                message = "아쉽지만, 정답자가 없네요. 여기서 게임을 마칩니다!"
+                winner_count = 0
 
-                print(f"✅ 라운드 {round_num} 결과: {result_text}")
-                self.result_q.put(result_text)
-                round_num += 1
-
-                # 3. 다음 문제와 정답, 그리고 다음 라운드의 상태를 기다림
-                try:
-                    print("▶ 다음 문제의 정답과 상태를 기다립니다...")
-                    next_command = self.command_q.get(timeout=60.0)
-                    
-                    if isinstance(next_command, dict) and next_command.get("command") == "NEXT_ROUND":
-                        current_answer = next_command.get("answer")
-                        # 다음 라운드의 is_predefined 상태를 업데이트
-                        current_is_predefined = next_command.get("is_predefined", False)
-
-                        if current_answer not in ["O", "X"]:
-                            self.result_q.put("오류: 다음 문제의 정답이 올바르지 않아 게임을 종료합니다.")
-                            break
-                    else:
-                        break
-                except queue.Empty:
-                    self.result_q.put("시간 초과! 다음 문제가 없어 게임을 종료합니다.")
-                    break
-            else: # 정답자가 없고 '사전 정의 퀴즈'도 아닌 경우에만 게임 종료
-                result_text = "아쉽네요. 맞힌 분이 없어요."
-                print(f"✅ 라운드 {round_num} 결과: {result_text}")
-                self.result_q.put(result_text)
+            print(f"✅ 라운드 {round_num} 결과: {message}")
+            
+            # 3. 메인 로직으로 결과 전송
+            result_to_send = {
+                "message": message,
+                "winner_count": winner_count,
+                "is_predefined": current_is_predefined
+            }
+            self.result_q.put(result_to_send)
+            
+            # ✨ 4. 게임 종료 여부 판단 (가장 중요한 변경점)
+            if not current_is_predefined and winner_count <= 1:
+                # 실제 게임에서 1명 이하가 남으면 워커의 임무는 끝. 즉시 루프 탈출.
                 break 
+
+            # ✨ 5. 게임이 계속될 경우에만 다음 명령을 기다림
+            try:
+                print("▶ 다음 문제의 정답과 상태를 기다립니다...")
+                next_command = self.command_q.get(timeout=60.0)
+                
+                if isinstance(next_command, dict) and next_command.get("command") == "NEXT_ROUND":
+                    current_answer = next_command.get("answer")
+                    current_is_predefined = next_command.get("is_predefined", False)
+
+                    if current_answer not in ["O", "X"]:
+                        # ... 오류 처리 ...
+                        break
+                    # ✨ 성공적으로 다음 명령을 받으면, 루프의 처음으로 돌아감 (continue 불필요)
+                else:
+                    # NEXT_ROUND가 아닌 다른 명령이 오면 게임 세션 종료
+                    break
+                
+            except queue.Empty:
+                print("⌛ 다음 명령 타임아웃. 워커를 종료합니다.")
+                break
+            
+            round_num += 1
         
-        print("🏁 OX 퀴즈 게임 세션 종료.")
+        print("🏁 OX 퀴즈 게임 워커 세션 종료.")
 
 
     def start_worker(self):
