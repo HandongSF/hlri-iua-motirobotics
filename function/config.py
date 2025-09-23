@@ -117,6 +117,9 @@ DANCE_AMP = int(os.getenv("DANCE_AMP", "140"))
 DANCE_HZ  = float(os.getenv("DANCE_HZ",  "1.2"))
 
 # ---- 새로운 안무용 모터 ID ----
+RIGHT_ARM_ID = 7
+RIGHT_HAND_ID = 8
+LEFT_HAND_ID = 12
 LEFT_ARM_ID = 11
 SHOULDER_ID = 5
 
@@ -125,3 +128,15 @@ LEFT_ARM_UP_POS = 800      # 왼팔을 위로 번쩍 들었을 때의 위치 (�
 LEFT_ARM_READY_POS = 1352   # 왼팔의 기본 준비 자세 위치 (예상 값)
 SHOULDER_CENTER_POS = 2048  # 어깨의 중앙 위치 (기본값)
 SHOULDER_LEFT_POS = 2200    # 왼쪽으로 어깨를 들었을 때의 위치 (예상 값)
+
+# 팔을 살짝 드는 동작
+RIGHT_ARM_READY_POS = 3644
+RIGHT_ARM_ACTION_POS = 3400  # 살짝 위로 (값이 작아지면 올라감)
+LEFT_ARM_READY_POS = 1452   # 기존 값
+LEFT_ARM_ACTION_POS = 1700   # 살짝 위로 (값이 커지면 올라감)
+
+# 손을 안으로 모으는 동작
+RIGHT_HAND_READY_POS = 1978
+RIGHT_HAND_ACTION_POS = 2300 # 안쪽으로 (값이 커지면 안으로)
+LEFT_HAND_READY_POS = 2053
+LEFT_HAND_ACTION_POS = 1800  # 안쪽으로 (값이 작아지면 안으로)
