@@ -615,7 +615,7 @@ class PressToTalk:
                     {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
                     {"question": "모티는 춤을 출 수 있다", "answer": "O", "explanation": "춤 한번 보여드릴까요?"},
                     {"question": "모티는 유튜버이다", "answer": "O", "explanation": "구독과 좋아요 알림 설정까지 꾸욱"},
-                    {"question": "모티는 농담을 잘한다", "answer": "O", "explanation": "제가 생각해도 그런 것 같아요! 언제든 '농담해줘'라고 말해보세요."}
+                    {"question": "모티는 농담을 잘한다", "answer": "O", "explanation": "제가 생각해도 그런 것 같아요! 언제든 '농담해줘'라고 말해보세요."}   
                 ]
                 quiz_round_counter = 0
 
@@ -625,29 +625,38 @@ class PressToTalk:
                     self.shared_state['mode'] = 'ox_quiz'
                     if self.emotion_queue: self.emotion_queue.put("THINKING")
                     
+                    self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
+                    self.tts.wait()
+                    self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요.")
+                    self.tts.wait()
+
                     is_game_over = False
+                    is_main_game_started = False # ✨ 1. 'count' 변수 대신 명확한 플래그 사용
+
                     while not is_game_over and not self.stop_event.is_set():
                         quiz_data = None
                         is_predefined = False
 
                         if quiz_round_counter < len(predefined_quizzes):
-                            # 사전 정의된 퀴즈 사용
                             quiz_data = predefined_quizzes[quiz_round_counter]
                             is_predefined = True 
-                            print(f"  - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
+                            print(f"  - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
                             quiz_round_counter += 1
-
                         else:
-                            print("  - 사전 정의된 퀴즈 소진. Gemini API로 새 퀴즈를 생성합니다.")
-
-                            # 1. Gemini를 통해 동적으로 퀴즈 생성
+                            if not is_main_game_started: # ✨ "본 게임 시작" 안내는 한 번만 하도록 수정
+                                self.tts.speak("자, 이제 연습이 끝났습니다! 지금부터 본격적으로 시작하겠습니다.")
+                                self.tts.wait()
+                                self.tts.speak("마지막까지 살아남으시는 분께는 특별한 상품을 드릴게요!")
+                                self.tts.wait()
+                                is_main_game_started = True
+                            
+                            print("  - Gemini API로 새 퀴즈를 생성합니다.")
                             quiz_prompt = (
                                 "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
                                 "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
                                 "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
                                 '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
                             )
-
                             try:
                                 quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
                                     quiz_prompt, 
@@ -655,26 +664,22 @@ class PressToTalk:
                                 )
                                 raw_json = _extract_text(quiz_response)
                                 quiz_data = json.loads(raw_json)
-                                print(f"  - 생성된 퀴즈: {quiz_data}")
+                                print(f"  - 생성된 퀴즈: {quiz_data}")
                             except Exception as e:
-                                print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
+                                print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
                                 quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
 
-                        # 2. 사용자에게 퀴즈 문제와 안내 음성 출력
-                        if is_first_round:
-                            self.tts.speak("OX 퀴즈를 시작합니다!")
-                        else:
+                        if not is_first_round and not is_predefined:
                             self.tts.speak("자, 다음 문제입니다!")
                         
                         self.tts.speak(quiz_data["question"])
                         self.tts.wait()
                         self.tts.speak("O는 오른쪽에, X는 왼쪽에 서주세요.")
                         self.tts.wait()
-                        self.tts.speak("5! 4! 3!")
-                        self.tts.speak("2! 1!")
+                        for i in range(5, 0, -1):
+                            self.tts.speak(str(i))
                         self.tts.wait()
 
-                        # 3. 워커에게 정답과 함께 라운드 시작/진행 명령 전송
                         command_to_send = {
                             "command": "START_OX_QUIZ" if is_first_round else "NEXT_ROUND",
                             "answer": quiz_data["answer"],
@@ -683,36 +688,49 @@ class PressToTalk:
                         self.ox_command_q.put(command_to_send)
                         is_first_round = False
 
-                        # 4. 워커로부터 결과 수신 대기 및 음성 출력
                         try:
-                            round_result_msg = self.rps_result_q.get(timeout=35)
-                            print(f"OX 퀴즈 라운드 결과 수신: {round_result_msg}")
-                            self.tts.speak(round_result_msg)
-                            self.tts.wait()
+                            # ✨ 2. 워커로부터 딕셔너리(Dictionary) 형태로 결과 수신
+                            round_result = self.rps_result_q.get(timeout=35)
+                            print(f"OX 퀴즈 라운드 결과 수신: {round_result}")
 
-                            time.sleep(1) # A short pause for dramatic effect
-
+                            # 딕셔너리에서 필요한 정보 추출
+                            message_to_speak = round_result.get("message", "결과를 처리 중입니다.")
+                            winner_count = round_result.get("winner_count", 0)
+                            is_predefined_from_worker = round_result.get("is_predefined", False)
+                            
+                            time.sleep(1)
                             correct_answer_text = f"정답은 {quiz_data['answer']} 였습니다!"
                             self.tts.speak(correct_answer_text)
                             self.tts.wait()
                             
                             if is_predefined and quiz_data.get("explanation"):
-                                # If it's a predefined quiz with an explanation, speak it
                                 self.tts.speak(quiz_data["explanation"])
                                 self.tts.wait()
 
-                            # 5. 게임 계속 여부 판단
-                            if is_predefined or "살아남았습니다" in round_result_msg:
+                            # ✨ 3. 워커가 보내준 결과 메시지를 음성으로 출력
+                            self.tts.speak(message_to_speak)
+                            self.tts.wait()
+                            
+                            # ✨ 4. 'winner_count'를 이용한 새로운 게임 흐름 제어 로직
+                            if is_predefined_from_worker:
                                 time.sleep(2)
-                                
-                                continue
-                            else:
+                                continue  # 연습문제는 항상 다음 라운드로 진행
+                            
+                            if winner_count <= 1:
+                                # 1명이 남았거나 0명이면 게임 종료
+                                time.sleep(10)
                                 is_game_over = True
+                            else: 
+                                # 2명 이상 남았을 경우 계속 진행
+                                time.sleep(2)
+                                continue
 
                         except queue.Empty:
                             print("OX 퀴즈 시간 초과. 워커로부터 결과를 받지 못했습니다.")
                             self.tts.speak("이런, 시간 안에 결과를 받지 못했어요. 게임을 종료합니다.")
                             is_game_over = True
+                    
+                    self.tts.wait()
                     
                     model_text = "OX 퀴즈 게임 종료."
 
