@@ -96,7 +96,7 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, right_wheel_speed)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, left_wheel_speed)
-        time.sleep(1.0)
+        time.sleep(1.2)
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
         print("✅ [안무 1단계] 완료!")
@@ -133,6 +133,13 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, right_wheel_speed)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, left_wheel_speed)
         
+        print("  - 팔 중간 위치로 들어올리기!")
+        with lock:
+            # 양팔(7번, 11번)을 중간 위치로 이동시킵니다.
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_MIDDLE_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_MIDDLE_POS)
+        time.sleep(0.7) # 팔이 올라갈 시간을 기다립니다.
+        
         # 2. 동시에 팔과 손을 '액션' 위치로 이동
         with lock:
             io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_ACTION_POS)
@@ -147,12 +154,7 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
         
-        print("  - 팔 중간 위치로 들어올리기!")
-        with lock:
-            # 양팔(7번, 11번)을 중간 위치로 이동시킵니다.
-            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_MIDDLE_POS)
-            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_MIDDLE_POS)
-        time.sleep(0.7) # 팔이 올라갈 시간을 기다립니다.
+        
         
         print("✅ [안무 4단계] 완료!")
         time.sleep(0.5)
@@ -183,11 +185,18 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         # 마지막 왼쪽으로 이동 (1단계와 동일한 회전)
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, -C.RIGHT_DIR * C.TURN_SPEED_UNITS)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, C.LEFT_DIR * C.TURN_SPEED_UNITS)
-        time.sleep(1.0)
+        time.sleep(1.2)
         # 스텝 종료 후 바퀴 정지
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
         time.sleep(0.5)
+        
+        print("  - 고개 오른쪽으로!")
+        with lock:
+            # 고개를 오른쪽으로 이동 (home_pan 위치에서 OFFSET만큼 더해줌)
+            goal_pos = home_pan - C.HEAD_PAN_OFFSET 
+            io.write4(pkt, port, C.HEAD_PAN_ID, C.ADDR_GOAL_POSITION, goal_pos)
+        time.sleep(0.5) # 고개가 돌아갈 시간을 기다립니다.
 
         # 5-2. 팔 동작 (위 -> 중간 -> 아래)
         arm_speed = 400 # 팔 움직임 속도
@@ -269,6 +278,18 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         with lock:
             io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
         time.sleep(0.5)
+        
+        print("  - 고개 왼쪽으로!")
+        with lock:
+            # 고개를 왼른쪽으로 이동 (home_pan 위치에서 OFFSET만큼 더해줌)
+            goal_pos = home_pan + C.HEAD_PAN_OFFSET 
+            io.write4(pkt, port, C.HEAD_PAN_ID, C.ADDR_GOAL_POSITION, goal_pos)
+        time.sleep(0.5) # 고개가 돌아갈 시간을 기다립니다.
+        
+        # 마지막 오른쪽으로 이동 (1단계와 동일한 회전)
+        wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, C.RIGHT_DIR * C.TURN_SPEED_UNITS)
+        wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, -C.LEFT_DIR * C.TURN_SPEED_UNITS)
+        time.sleep(1.2)
         
         print("✅ [안무 7단계] 완료!")
         
