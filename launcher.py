@@ -126,8 +126,14 @@ def main():
     signal.signal(signal.SIGINT, _handle_sigint)
 
     try:
-        I.initialize_robot(port, pkt, dxl_lock) # 👈 이 한 줄로 교체!
-        print("▶ 초기화 완료: 팬/틸트 + 보조(Position), 휠(Velocity)")
+        # 1. 통합 초기화 함수를 호출합니다. (이 함수는 init.py에 있어야 합니다)
+        I.initialize_robot(port, pkt, dxl_lock)
+        
+        # 2. 춤이 끝난 후 돌아올 고개의 '가운데' 위치를 config.py에서 직접 가져옵니다.
+        home_pan = I.MOTOR_HOME_POSITIONS.get(C.PAN_ID, 2048) # ID 10번 모터의 홈 위치
+        home_tilt = I.MOTOR_HOME_POSITIONS.get(C.TILT_ID, 2048) # ID 9번 모터의 홈 위치
+
+        print("▶ 초기화 완료: 모든 모터가 지정된 위치로 이동했습니다.")
     except Exception as e:
         print(f"❌ 초기화 실패: {e}")
         _graceful_shutdown(port, pkt, dxl_lock)
@@ -139,21 +145,19 @@ def main():
     t_face = threading.Thread(
         target=F.face_tracker_worker,
         args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event, shared_state),
-        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True), # draw_mesh를 True로 변경하여 시각화 활성화
+        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True),
         name="face", daemon=True)
 
-    #start_dance = lambda: D.start_dance(port, pkt, dxl_lock)
-    start_dance  = lambda: D.start_new_dance(port, pkt, dxl_lock)
+    # 3. 춤 시작 함수 호출 시 필요한 모든 정보(shared_state, home_pan, home_tilt)를 전달합니다.
+    start_dance = lambda: D.start_new_dance(port, pkt, dxl_lock, shared_state, home_pan, home_tilt, emotion_queue)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
     play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
     
-    # PTT 스레드를 먼저 정의해야 얼굴 스레드에 넘겨줄 수 있습니다.
     t_ptt = threading.Thread(
         target=run_ptt,
         args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q),
         name="ptt", daemon=True)
 
-    # 얼굴 스레드에 t_ptt 객체를 마지막 인자로 전달합니다.
     t_visual_face = threading.Thread(
         target=run_face_app,
         args=(emotion_queue, hotword_queue, stop_event, sleepy_event, t_ptt),
@@ -174,6 +178,7 @@ def main():
         args=(port, pkt, dxl_lock, stop_event),
         name="wheels", daemon=True)
 
+    # ... (이하 스레드 시작 및 종료 코드는 동일합니다) ...
     t_face.start()
     print(f"▶ FaceTracker 시작 (camera_index={cam_index})")
     t_visual_face.start()
@@ -189,24 +194,20 @@ def main():
 
     try:
         F.display_loop_main_thread(stop_event, window_name="Camera Feed (on Laptop)")
-
     except KeyboardInterrupt:
         print("\n🛑 KeyboardInterrupt 감지 → 종료 신호 보냄")
         stop_event.set()
     finally:
         if not stop_event.is_set(): stop_event.set()
         print("▶ 모든 스레드 종료 대기 중...")
-        
-        # 이제 종료 순서는 display/main.py에서 제어하므로, 여기서는 각 스레드가 종료되기를 기다리기만 합니다.
         t_ptt.join(timeout=10.0)
-        t_visual_face.join(timeout=15.0) # PTT를 기다릴 수 있으므로 시간 여유
+        t_visual_face.join(timeout=15.0)
         t_face.join(timeout=3.0)
         t_rps_worker.join(timeout=5.0)
         t_ox_worker.join(timeout=5.0)
         t_wheels.join(timeout=3.0)
-        
         _graceful_shutdown(port, pkt, dxl_lock)
         print("■ launcher 정상 종료")
-
+        
 if __name__ == "__main__":                                     
     main()

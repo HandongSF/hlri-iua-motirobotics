@@ -75,8 +75,11 @@ BAUDRATE         = int(os.getenv("DXL_BAUD", "57600"))
 PROTOCOL_VERSION = float(os.getenv("DXL_PROTO", "2.0"))
 
 # ---- 팬/틸트(Position) ----
-PAN_ID, TILT_ID = 2, 9
+PAN_ID, TILT_ID = 10, 9
 SERVO_MIN, SERVO_MAX = 0, 4095
+TILT_POS_MAX = 2030 # 👈 9번 모터의 최대 위치 제한값을 여기에 추가합니다.
+PAN_SIGN = 1      # 👈 이 줄을 추가해주세요. (팬 모터 방향)
+TILT_SIGN = -1    # 👈 이 줄을 추가해주세요. (틸트 모터 방향)
 KP_PAN, KP_TILT = 0.2, 0.2       # ✅ P 게인 (엔진)
 KI_PAN, KI_TILT = 0.001, 0.001     # ✅ I 게인 (미세조정) - 이 부분이 누락되었을 수 있습니다.
 KD_PAN, KD_TILT = 0.15, 0.15       # ✅ D 게인 (브레이크)
@@ -117,11 +120,40 @@ DANCE_AMP = int(os.getenv("DANCE_AMP", "140"))
 DANCE_HZ  = float(os.getenv("DANCE_HZ",  "1.2"))
 
 # ---- 새로운 안무용 모터 ID ----
+RIGHT_ARM_ID = 7
+RIGHT_HAND_ID = 8
+LEFT_HAND_ID = 12
 LEFT_ARM_ID = 11
 SHOULDER_ID = 5
+HEAD_PAN_ID = 10
 
-# ---- 새로운 안무용 모터 위치 값 (필요시 조절) ----
-LEFT_ARM_UP_POS = 800      # 왼팔을 위로 번쩍 들었을 때의 위치 (예상 값)
-LEFT_ARM_READY_POS = 1352   # 왼팔의 기본 준비 자세 위치 (예상 값)
-SHOULDER_CENTER_POS = 2048  # 어깨의 중앙 위치 (기본값)
-SHOULDER_LEFT_POS = 2200    # 왼쪽으로 어깨를 들었을 때의 위치 (예상 값)
+# ---- 새로운 안무용 모터 위치 값 (방향 수정 완료) ----
+
+# [준비 자세 - HOME 위치]
+RIGHT_ARM_READY_POS = 3644
+LEFT_ARM_READY_POS = 1452
+RIGHT_HAND_READY_POS = 1978
+LEFT_HAND_READY_POS = 2053
+SHOULDER_CENTER_POS = 2073
+
+# [안무 2단계] 왼팔 번쩍 들기
+LEFT_ARM_UP_POS = 800      # (값이 작아져야 올라감)
+
+# [안무 3단계 & 7단계] 어깨 움직이기
+SHOULDER_LEFT_POS = 2200   # (값이 커져야 왼쪽)
+SHOULDER_RIGHT_POS = 1846  # (값이 작아져야 오른쪽)
+
+# [안무 4단계] 팔 모으기
+RIGHT_ARM_ACTION_POS = 3400  # 살짝 위로
+LEFT_ARM_ACTION_POS = 1700   # 살짝 위로
+RIGHT_HAND_ACTION_POS = 1500 # 안쪽으로
+LEFT_HAND_ACTION_POS = 1500  # 안쪽으로
+
+# [안무 5, 6, 8단계] 팔 위/중간/아래 동작
+RIGHT_ARM_TOP_POS = 4050     # 👈 수정: 오른팔 위로 (값이 커져야 함)
+LEFT_ARM_TOP_POS = 800       # 👈 수정: 왼팔 위로 (값이 작아져야 함)
+RIGHT_ARM_MIDDLE_POS = 3850  # 👈 수정: 오른팔 중간
+LEFT_ARM_MIDDLE_POS = 1100   # 👈 수정: 왼팔 중간
+RIGHT_ARM_DOWN_POS = 3644    # 아래 (준비 자세와 동일)
+LEFT_ARM_DOWN_POS = 1452     # 아래 (준비 자세와 동일)
+HEAD_PAN_OFFSET = 400 # 👈 고개를 좌우로 움직일 각도 (값이 클수록 많이 움직입니다)
