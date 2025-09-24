@@ -21,7 +21,6 @@ import time, math, threading
 from dynamixel_sdk import PortHandler, PacketHandler
 from . import config as C, dxl_io as io
 from . import wheel
-import time
 
 _dance_event = threading.Event()
 _dance_thread = None
@@ -266,18 +265,32 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         time.sleep(0.5)
         
         print("✅ [안무 7단계] 완료!")
+        
 
     finally:
-        print("🎉🎉 새로운 춤 동작 모두 완료! 얼굴 추적을 다시 시작합니다.")
-        # 춤이 모두 끝나면 모든 관절을 원래의 준비 자세로 되돌립니다.
-        with lock:
-            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_READY_POS)
-            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
-            io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
-            # 바퀴도 마지막 회전 상태에서 정지하도록 추가
+        shared_state['mode'] = 'tracking'
+        print("🎉🎉 춤 시퀀스 종료! 얼굴 추적 모드로 즉시 전환합니다.")
+
+        try:
+            print("🤖 [마무리] 모든 모터를 초기 자세로 되돌립니다.")
+
+            # 1. with lock 블록은 io.write4 함수들에만 적용합니다.
+            with lock:
+                io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_READY_POS)
+                io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
+                io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_READY_POS)
+                io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+                io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
+
+            # 2. wheel.set_wheel_speed 함수는 lock 블록 밖에서 호출합니다.
             wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
             wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
-        shared_state['mode'] = 'tracking'
+
+            time.sleep(1.0)
+            print("✅ 모든 모터 원위치 복귀 완료.")
+        except Exception as e:
+            print(f"  ⚠️ 춤 종료 후 모터 원위치 복귀 중 오류 발생: {e}")
+
 
 def stop_dance(port: PortHandler, pkt: PacketHandler, lock, return_home: bool = True, timeout: float = 2.0):
     global _dance_thread, _dance_origin_pos
