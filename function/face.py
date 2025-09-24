@@ -174,8 +174,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         last_error_tilt = error_tilt
                         
                         # 6. 최종 위치 업데이트
-                        pan_pos  = int(io.clamp(pan_pos  + PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
-                        tilt_pos = int(io.clamp(tilt_pos + TILT_SIGN * tilt_delta, C.SERVO_MIN, C.SERVO_MAX))
+                        pan_pos  = int(io.clamp(pan_pos  + C.PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
+                        tilt_pos = int(io.clamp(tilt_pos + C.TILT_SIGN * tilt_delta, C.SERVO_MIN, C.TILT_POS_MAX)) # 👈 SERVO_MAX를 TILT_POS_MAX로 변경
 
                         # --- ✅ PID 제어 로직 끝 ---
 
