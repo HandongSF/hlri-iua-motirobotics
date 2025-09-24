@@ -79,7 +79,7 @@ def start_dance(port: PortHandler, pkt: PacketHandler, lock, amp: int | None = N
     )
     _dance_thread.start()
     
-def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int):
+def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int, emotion_queue):
     try:
         # --- [준비] 춤 모드로 전환하고 고개를 정면으로! ---
         print("🤖 [춤 준비] 얼굴 추적 중지 및 고개 정렬")
@@ -147,6 +147,12 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
         wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
         
+        print("  - 팔 중간 위치로 들어올리기!")
+        with lock:
+            # 양팔(7번, 11번)을 중간 위치로 이동시킵니다.
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_MIDDLE_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_MIDDLE_POS)
+        time.sleep(0.7) # 팔이 올라갈 시간을 기다립니다.
         
         print("✅ [안무 4단계] 완료!")
         time.sleep(0.5)
@@ -269,6 +275,8 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
 
     finally:
         shared_state['mode'] = 'tracking'
+        if emotion_queue:
+            emotion_queue.put("NEUTRAL")
         print("🎉🎉 춤 시퀀스 종료! 얼굴 추적 모드로 즉시 전환합니다.")
 
         try:
@@ -308,7 +316,5 @@ def stop_dance(port: PortHandler, pkt: PacketHandler, lock, return_home: bool = 
         print(f"↩️  DANCE return to origin: {goal}")
         
 
-# 👈 launcher.py에서 보낸 6개의 인자를 모두 받도록 수정합니다.
-def start_new_dance(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int):
-    # 👈 받은 인자들을 _new_dance_routine에 그대로 전달합니다.
-    threading.Thread(target=_new_dance_routine, args=(port, pkt, lock, shared_state, home_pan, home_tilt), daemon=True).start()
+def start_new_dance(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int, emotion_queue):
+    threading.Thread(target=_new_dance_routine, args=(port, pkt, lock, shared_state, home_pan, home_tilt, emotion_queue), daemon=True).start()

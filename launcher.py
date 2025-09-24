@@ -149,7 +149,7 @@ def main():
         name="face", daemon=True)
 
     # 3. 춤 시작 함수 호출 시 필요한 모든 정보(shared_state, home_pan, home_tilt)를 전달합니다.
-    start_dance = lambda: D.start_new_dance(port, pkt, dxl_lock, shared_state, home_pan, home_tilt)
+    start_dance = lambda: D.start_new_dance(port, pkt, dxl_lock, shared_state, home_pan, home_tilt, emotion_queue)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
     play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
     
