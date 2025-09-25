@@ -329,6 +329,7 @@ class PressToTalk:
                  sleepy_event: Optional[threading.Event] = None,
                  shared_state: Optional[dict] = None,
                  ox_command_q: Optional[multiprocessing.Queue] = None,
+                 ox_result_q: Optional[multiprocessing.Queue] = None,
                  ):
         
         api_key = os.environ.get("GOOGLE_API_KEY")
@@ -370,6 +371,7 @@ class PressToTalk:
         self.rps_command_q = rps_command_q
         self.rps_result_q  = rps_result_q
         self.ox_command_q = ox_command_q
+        self.ox_result_q = ox_result_q
         self.busy_lock = threading.Lock()
         self.busy_signals = 0
         self.background_keep_alive_thread = None
@@ -615,7 +617,7 @@ class PressToTalk:
                     {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
                     {"question": "모티는 춤을 출 수 있다", "answer": "O", "explanation": "춤 한번 보여드릴까요?"},
                     {"question": "모티는 유튜버이다", "answer": "O", "explanation": "구독과 좋아요 알림 설정까지 꾸욱"},
-                    {"question": "모티는 농담을 잘한다", "answer": "O", "explanation": "제가 생각해도 그런 것 같아요! 언제든 '농담해줘'라고 말해보세요."}   
+                    {"question": "모티는 농담을 잘한다", "answer": "O", "explanation": "제가 생각해도 그런 것 같아요! 언제든 '농담해줘'라고 말해보세요."}  
                 ]
                 quiz_round_counter = 0
 
@@ -627,7 +629,7 @@ class PressToTalk:
                     
                     self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
                     self.tts.wait()
-                    self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요.")
+                    self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
                     self.tts.wait()
 
                     is_game_over = False
@@ -649,6 +651,17 @@ class PressToTalk:
                                 self.tts.speak("마지막까지 살아남으시는 분께는 특별한 상품을 드릴게요!")
                                 self.tts.wait()
                                 is_main_game_started = True
+
+                            if random.random() < 0.5: # 50% 확률
+                                thinking_phrases = [
+                                    "음... 어떤 문제를 내볼까?",
+                                    "히히 이거 재미있겠다",
+                                    "이번에는 조금 어려울 수도 있어요."
+                                    "과연 맞출 수 있을까요?"
+                                ]
+                                # 위 리스트에서 무작위로 문장 하나를 선택하여 말합니다.
+                                self.tts.speak(random.choice(thinking_phrases))
+                                self.tts.wait() # 추임새를 끝까지 말하도록 기다립니다.
                             
                             print("  - Gemini API로 새 퀴즈를 생성합니다.")
                             quiz_prompt = (
@@ -690,7 +703,7 @@ class PressToTalk:
 
                         try:
                             # ✨ 2. 워커로부터 딕셔너리(Dictionary) 형태로 결과 수신
-                            round_result = self.rps_result_q.get(timeout=35)
+                            round_result = self.ox_result_q.get(timeout=35)
                             print(f"OX 퀴즈 라운드 결과 수신: {round_result}")
 
                             # 딕셔너리에서 필요한 정보 추출
@@ -716,14 +729,32 @@ class PressToTalk:
                                 time.sleep(2)
                                 continue  # 연습문제는 항상 다음 라운드로 진행
                             
-                            if winner_count <= 1:
-                                # 1명이 남았거나 0명이면 게임 종료
-                                time.sleep(10)
-                                is_game_over = True
-                            else: 
-                                # 2명 이상 남았을 경우 계속 진행
-                                time.sleep(2)
+                            if winner_count > 1:
+                                # --- 2. 게임이 계속될 경우 (2명 이상 생존) ---
+                                print("  - 😊 정답자가 있어 HAPPY 표정으로 변경")
+                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                                
+                                # ✨ 표정을 보여주기 위해 3초간 기다립니다.
+                                time.sleep(3)
+                                
+                                print("  - 🤔 다음 라운드 준비를 위해 THINKING 표정으로 변경")
+                                if self.emotion_queue: self.emotion_queue.put("THINKING")
+                                time.sleep(1) # 다음 문제 시작 전 짧은 텀
                                 continue
+
+                            elif winner_count == 1:
+                                # --- 3. 최종 우승자가 나왔을 경우 ---
+                                print("  - 🎉 최종 우승! HAPPY 표정으로 변경")
+                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                                time.sleep(10) # 축하 세레모니 시간
+                                is_game_over = True
+
+                            else: # winner_count == 0
+                                # --- 4. 전원 탈락했을 경우 ---
+                                print("  - 😥 정답자가 없어 SAD 표정으로 변경")
+                                if self.emotion_queue: self.emotion_queue.put("SAD")
+                                time.sleep(10) # 아쉬움을 표현할 시간
+                                is_game_over = True
 
                         except queue.Empty:
                             print("OX 퀴즈 시간 초과. 워커로부터 결과를 받지 못했습니다.")

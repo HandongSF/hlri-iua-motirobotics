@@ -84,7 +84,7 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q):
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q,ox_result_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -98,7 +98,8 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, ho
             rps_result_q=rps_result_q,
             sleepy_event=sleepy_event,
             shared_state=shared_state,
-            ox_command_q=ox_command_q 
+            ox_command_q=ox_command_q,
+            ox_result_q=ox_result_q 
         )
         app.run()
     except Exception as e: print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
@@ -116,6 +117,7 @@ def main():
     rps_command_q = multiprocessing.Queue()
     rps_result_q = multiprocessing.Queue()
     ox_command_q = multiprocessing.Queue()
+    ox_result_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
     sleepy_event = threading.Event()
     shared_state = {'mode': 'tracking'}
@@ -155,7 +157,7 @@ def main():
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q),
+        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q),
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(
@@ -170,7 +172,7 @@ def main():
     
     t_ox_worker = threading.Thread(
         target=ox_quiz_game_worker,
-        args=(ox_command_q, rps_result_q, video_frame_q), 
+        args=(ox_command_q, ox_result_q, video_frame_q), 
         name="ox_worker", daemon=True)
     
     t_wheels = threading.Thread(
