@@ -330,7 +330,7 @@ class PressToTalk:
                  shared_state: Optional[dict] = None,
                  ox_command_q: Optional[multiprocessing.Queue] = None,
                  ox_result_q: Optional[multiprocessing.Queue] = None,
-                 ):
+                 ): 
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -396,7 +396,28 @@ class PressToTalk:
         if self.sleepy_event:
             self.snoring_thread = threading.Thread(target=self._snoring_worker, daemon=True)
             self.snoring_thread.start()
-        
+
+    def _fetch_quizzes_in_background(self, result_container: list):
+            """[백그라운드 스레드용] Gemini API를 호출하여 퀴즈 목록을 생성하고 result_container에 저장합니다."""
+            print("  - 🏃 (백그라운드) 본 게임 퀴즈 생성을 시작합니다...")
+            try:
+                quiz_prompt = (
+                    "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 10개만 만들어줘. "
+                    "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
+                    "출력은 반드시 다음 JSON 리스트 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
+                    '[{"question": "<퀴즈1 질문>", "answer": "O 또는 X"}, {"question": "<퀴즈2 질문>", "answer": "O 또는 X"}]'
+                )
+                quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
+                    quiz_prompt, 
+                    generation_config={"response_mime_type": "application/json"}
+                )
+                raw_json = _extract_text(quiz_response)
+                quizzes = json.loads(raw_json)
+                result_container.extend(quizzes) # 결과를 컨테이너에 추가
+                print(f"  - ✅ (백그라운드) 퀴즈 {len(quizzes)}개 생성 완료!")
+            except Exception as e:
+                print(f"  - ❌ (백그라운드) 퀴즈 생성 실패: {e}")  
+
     def _print_intro(self):
         print("\n=== Gemini PTT (통합 버전) ===")
         print("▶ '안녕 모티'로 호출(SLEEPY 상태) → 스페이스바로 대화(NEUTRAL 상태) → ESC로 종료")
@@ -614,12 +635,13 @@ class PressToTalk:
                 
                 predefined_quizzes = [
                     {"question": "제 이름은 모터입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
-                    {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
-                    {"question": "모티는 춤을 출 수 있다", "answer": "O", "explanation": "춤 한번 보여드릴까요?"},
-                    {"question": "모티는 유튜버이다", "answer": "O", "explanation": "구독과 좋아요 알림 설정까지 꾸욱"},
-                    {"question": "모티는 농담을 잘한다", "answer": "O", "explanation": "제가 생각해도 그런 것 같아요! 언제든 '농담해줘'라고 말해보세요."}  
+                    
                 ]
                 quiz_round_counter = 0
+
+                # 백그라운드 스레드가 결과를 담을 컨테이너 생성
+                quiz_result_container = []
+                self.generated_quizzes = []
 
                 is_first_round = True
                 try:
@@ -632,8 +654,15 @@ class PressToTalk:
                     self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
                     self.tts.wait()
 
+                     # 백그라운드에서 퀴즈 생성을 시작시킴
+                    quiz_fetch_thread = threading.Thread(
+                        target=self._fetch_quizzes_in_background,
+                        args=(quiz_result_container,)
+                    )
+                    quiz_fetch_thread.start()
+
                     is_game_over = False
-                    is_main_game_started = False # ✨ 1. 'count' 변수 대신 명확한 플래그 사용
+                    is_main_game_started = False # 변수 대신 명확한 플래그 사용
 
                     while not is_game_over and not self.stop_event.is_set():
                         quiz_data = None
@@ -645,13 +674,50 @@ class PressToTalk:
                             print(f"  - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
                             quiz_round_counter += 1
                         else:
-                            if not is_main_game_started: # ✨ "본 게임 시작" 안내는 한 번만 하도록 수정
+                            if not is_main_game_started: # "본 게임 시작" 안내는 한 번만 하도록 수정
                                 self.tts.speak("자, 이제 연습이 끝났습니다! 지금부터 본격적으로 시작하겠습니다.")
                                 self.tts.wait()
+
+                                # 백그라운드 작업이 끝날 때까지 여기서 잠시 대기 (대부분 바로 통과)
+                                print("  - ⌛ 본 게임 퀴즈 준비 완료 여부 확인 중...")
+                                quiz_fetch_thread.join(timeout=5.0) # 최대 5초간 기다림
+
+                                # 백그라운드에서 가져온 퀴즈를 self 변수로 옮김
+                                self.generated_quizzes = quiz_result_container
+
                                 self.tts.speak("마지막까지 살아남으시는 분께는 특별한 상품을 드릴게요!")
                                 self.tts.wait()
                                 is_main_game_started = True
 
+                            if self.generated_quizzes:
+                                quiz_data = self.generated_quizzes.pop(0)
+                                print(f"  - 사전 생성 퀴즈 사용: {quiz_data}")
+
+                            else:
+                                print("  - Gemini API로 새 퀴즈를 생성합니다.")
+                                quiz_prompt = (
+                                    "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
+                                    "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
+                                    "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
+                                    '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
+                                )
+                                try:
+                                    quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
+                                        quiz_prompt, 
+                                        generation_config={"response_mime_type": "application/json"}
+                                    )
+                                    raw_json = _extract_text(quiz_response)
+                                    quiz_data = json.loads(raw_json)
+                                    print(f"  - 생성된 퀴즈: {quiz_data}")
+                                except Exception as e:
+                                    print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
+                                    quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
+
+                        if not is_predefined:
+                            if not is_first_round:
+                                self.tts.speak("자, 다음 문제입니다!")
+                                self.tts.wait()
+                        
                             if random.random() < 0.5: # 50% 확률
                                 thinking_phrases = [
                                     "음... 어떤 문제를 내볼까?",
@@ -662,28 +728,6 @@ class PressToTalk:
                                 # 위 리스트에서 무작위로 문장 하나를 선택하여 말합니다.
                                 self.tts.speak(random.choice(thinking_phrases))
                                 self.tts.wait() # 추임새를 끝까지 말하도록 기다립니다.
-                            
-                            print("  - Gemini API로 새 퀴즈를 생성합니다.")
-                            quiz_prompt = (
-                                "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
-                                "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
-                                "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
-                                '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
-                            )
-                            try:
-                                quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
-                                    quiz_prompt, 
-                                    generation_config={"response_mime_type": "application/json"}
-                                )
-                                raw_json = _extract_text(quiz_response)
-                                quiz_data = json.loads(raw_json)
-                                print(f"  - 생성된 퀴즈: {quiz_data}")
-                            except Exception as e:
-                                print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
-                                quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
-
-                        if not is_first_round and not is_predefined:
-                            self.tts.speak("자, 다음 문제입니다!")
                         
                         self.tts.speak(quiz_data["question"])
                         self.tts.wait()
