@@ -80,13 +80,13 @@ SERVO_MIN, SERVO_MAX = 0, 4095
 TILT_POS_MAX = 2030 # 👈 9번 모터의 최대 위치 제한값을 여기에 추가합니다.
 PAN_SIGN = 1      # 👈 이 줄을 추가해주세요. (팬 모터 방향)
 TILT_SIGN = -1    # 👈 이 줄을 추가해주세요. (틸트 모터 방향)
-KP_PAN, KP_TILT = 0.2, 0.2       # ✅ P 게인 (엔진)
-KI_PAN, KI_TILT = 0.001, 0.001     # ✅ I 게인 (미세조정) - 이 부분이 누락되었을 수 있습니다.
-KD_PAN, KD_TILT = 0.15, 0.15       # ✅ D 게인 (브레이크)
-DEAD_ZONE = 50
+KP_PAN, KP_TILT = 0.08, 0.08       # ✅ P 게인 (엔진)
+KI_PAN, KI_TILT = 0.005, 0.005     # ✅ I 게인 (미세조정) - 이 부분이 누락되었을 수 있습니다.
+KD_PAN, KD_TILT = 0.06, 0.06       # ✅ D 게인 (브레이크)
+DEAD_ZONE = 10
 MAX_PIXEL_OFF = 200
-PROFILE_VELOCITY = 100
-MIN_MOVE_DELTA = 15
+PROFILE_VELOCITY = 150
+MIN_MOVE_DELTA = 5
 
 # ---- 휠(Velocity) ----
 LEFT_ID, RIGHT_ID = 4, 3
