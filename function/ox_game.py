@@ -120,13 +120,13 @@ class OxQuizGame:
                 winner_count = round_result.get("winner_count", 0)
                 
                 if current_is_predefined:
-                    message = "연습문제니까 모두 다음으로 넘어갈게요!"
+                    message = "계속 진행해볼게요!"
                 elif winner_count == 1:
-                    message = "와! 최후의 1인이 결정되었습니다! 축하드립니다!"
+                    message = "최후의 승자가 탄생했습니다! 모두 축하의 박수를 보내주세요!"
                 else:
                     message = f"{winner_count}명이 살아남았습니다. 다음 문제 갑니다!"
             else: # 정답자가 없는 경우
-                message = "아쉽지만, 정답자가 없네요. 여기서 게임을 마칩니다!"
+                message = "아쉽게도 모두 탈락했네요. 다음에 다시 도전해봐요!"
                 winner_count = 0
 
             print(f"✅ 라운드 {round_num} 결과: {message}")
