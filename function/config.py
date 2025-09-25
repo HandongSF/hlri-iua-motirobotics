@@ -75,7 +75,7 @@ BAUDRATE         = int(os.getenv("DXL_BAUD", "57600"))
 PROTOCOL_VERSION = float(os.getenv("DXL_PROTO", "2.0"))
 
 # ---- 팬/틸트(Position) ----
-PAN_ID, TILT_ID = 10, 9
+PAN_ID, TILT_ID = 2, 9
 SERVO_MIN, SERVO_MAX = 0, 4095
 TILT_POS_MAX = 2030 # 👈 9번 모터의 최대 위치 제한값을 여기에 추가합니다.
 PAN_SIGN = 1      # 👈 이 줄을 추가해주세요. (팬 모터 방향)
@@ -125,7 +125,7 @@ RIGHT_HAND_ID = 8
 LEFT_HAND_ID = 12
 LEFT_ARM_ID = 11
 SHOULDER_ID = 5
-HEAD_PAN_ID = 10
+HEAD_PAN_ID = 2
 
 # ---- 새로운 안무용 모터 위치 값 (방향 수정 완료) ----
 
