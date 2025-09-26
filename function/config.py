@@ -157,3 +157,13 @@ LEFT_ARM_MIDDLE_POS = 1100   # 👈 수정: 왼팔 중간
 RIGHT_ARM_DOWN_POS = 3644    # 아래 (준비 자세와 동일)
 LEFT_ARM_DOWN_POS = 1452     # 아래 (준비 자세와 동일)
 HEAD_PAN_OFFSET = 400 # 👈 고개를 좌우로 움직일 각도 (값이 클수록 많이 움직입니다)
+
+# ---- 댄스 전용 속도 프로파일 ----
+# 1. 손/팔 등 관절 모터 속도 (Profile Velocity)
+SPEED_NORMAL = 150  # 평상시 부드러운 속도
+SPEED_DANCE = 300   # 춤 출때 2배 빠른 속도
+
+# 2. 바퀴 모터 회전 속도 (Velocity)
+# 기존 TURN_RPM(25.0)의 2배인 50.0으로 설정
+DANCE_TURN_RPM = 50.0
+DANCE_TURN_SPEED_UNITS = rpm_to_unit(DANCE_TURN_RPM)
