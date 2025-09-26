@@ -397,6 +397,46 @@ class PressToTalk:
             self.snoring_thread = threading.Thread(target=self._snoring_worker, daemon=True)
             self.snoring_thread.start()
 
+        self.announcement_thread = None
+        self.stop_announcement_event = threading.Event()
+        self.announcement_active = False
+
+    def _announcement_worker(self):
+        # 안내 방송을 60초마다 반복하는 스레드 워커 함수입니다
+        announcement_text = "한동의 미남 미녀 여러분 안녕하세요. 잠시만 주목해주세요! 30분부터 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요. "
+        print("📢 안내 방송 스레드가 시작되었습니다.")
+        try:
+            while not self.stop_announcement_event.is_set():
+                self.tts.speak(announcement_text)
+                interrupted = self.stop_announcement_event.wait(timeout=60.0)
+                if interrupted:
+                    break
+        finally:
+            # 스레드가 어떤 이유로든 종료될 때, 뒷정리를 확실하게 합니다.
+            # 이것이 경쟁 상태를 막는 핵심입니다.
+            self.lower_busy_signal()
+            self.announcement_active = False
+            print("🛑 안내 방송 스레드가 종료되었습니다.")
+
+    def toggle_announcement(self):
+        """'p' 키에 반응해 안내 방송을 켜고 끄는 더 안정적인 함수입니다."""
+        # 불안정한 상태 변수 대신, 실제 스레드가 살아있는지를 직접 확인합니다.
+        is_running = self.announcement_thread is not None and self.announcement_thread.is_alive()
+
+        if is_running:
+            # 스레드가 살아있다면, 중지 신호를 보냅니다.
+            print("...안내 방송 중지 신호를 보냅니다...")
+            self.stop_announcement_event.set()
+        else:
+            # 스레드가 없거나 죽었다면, 새로 시작합니다.
+            print("...안내 방송 시작을 시도합니다...")
+            self.raise_busy_signal()
+            self.announcement_active = True # 시작 직전에만 상태를 True로 설정
+            self.stop_announcement_event.clear()
+            self.announcement_thread = threading.Thread(target=self._announcement_worker, daemon=True)
+            self.announcement_thread.start()
+            print("✅ 60초마다 안내 방송을 시작합니다.")
+
     def _fetch_quizzes_in_background(self, result_container: list):
             """[백그라운드 스레드용] Gemini API를 호출하여 퀴즈 목록을 생성하고 result_container에 저장합니다."""
             print("  - 🏃 (백그라운드) 본 게임 퀴즈 생성을 시작합니다...")
@@ -676,7 +716,13 @@ class PressToTalk:
                 try:
                     self.raise_busy_signal()
                     self.shared_state['mode'] = 'ox_quiz'
-                    self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
+                    # 진행모드
+                    self.tts.speak("안녕하세요 한동의 미남 미녀 여러분! 저는 따뜻한 공감이 필요한 여러분을 위해 태어난 로봇! 모티입니다. 7주차 시험 기간 다들 정말 고생 많으시죠?.. 밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 짠해요. 괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? 복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!")    
+                    self.tts.wait()
+                    self.tts.speak("그럼 지금부터 여러분과 OX 퀴즈 게임을 시작하겠습니다!")
+
+                    # 기존모드
+                    # self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
                     self.tts.wait()
                     self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
                     self.tts.wait()
@@ -722,9 +768,9 @@ class PressToTalk:
 
                             if is_current_round_crazy:
                                 if not is_crazy_mode_active:
-                                    print(f"미친 난위도 퀴즈 출제! (본 게임 {main_game_round_counter + 1} 라운드)")
+                                    print(f"미친 난이도 퀴즈 출제! (본 게임 {main_game_round_counter + 1} 라운드)")
                                     if self.emotion_queue: self.emotion_queue.put("ANGRY")
-                                    self.tts.speak("후후후... 난위도 상승! 후후후... 이번엔 정말 어려울 거다...")
+                                    self.tts.speak("후후후... 난이도 상승! 후후후... 이번엔 정말 어려울 거다...")
                                     self.tts.wait()
                                     is_crazy_mode_active = True # 상태를 '크레이지 모드'로 변경
 
@@ -928,12 +974,33 @@ class PressToTalk:
             if key == keyboard.Key.space:
                 self.last_activity_time = time.time()
                 self._stop_recording_and_transcribe()
+
+            elif key == keyboard.KeyCode.from_char('p'):
+                self.toggle_announcement()
+
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
+                self.stop_announcement_event.set() 
+                self.stop_event.set()
+                
                 if self.current_listener and self.current_listener.is_alive():
                     self.current_listener.stop()
-                self.stop_event.set()
                 return False 
+            
+        except AttributeError:
+        # pynput 라이브러리에서 space, esc 같은 특수 키를 처리할 때 발생할 수 있는 오류를 방지합니다.
+        # 기존 로직은 그대로 유지합니다.
+            if key == keyboard.Key.space:
+                self.last_activity_time = time.time()
+                self._stop_recording_and_transcribe()
+            elif key == keyboard.Key.esc:
+                print("ESC 감지 -> 모든 스레드에 종료 신호 보냄")
+                self.stop_announcement_event.set() 
+                self.stop_event.set()
+                if self.current_listener and self.current_listener.is_alive():
+                    self.current_listener.stop()
+                return False    
+            
         except Exception as e: print(f"[키 처리 오류 on_release] {e}", file=sys.stderr)
 
     def run(self):
