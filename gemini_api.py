@@ -635,20 +635,47 @@ class PressToTalk:
                 
                 predefined_quizzes = [
                     {"question": "제 이름은 모터입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
-                    
+                    {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
+                    {"question": "모티는 나름 유명한 유튜버이다", "answer": "O", "explanation": "구독과 좋아요! 알림 설정까지 꾸욱 눌러주세요~!"},
                 ]
-                quiz_round_counter = 0
+
+                crazy_mode_quizzes = {
+                    3: { # 4번째 본 게임 라운드
+                        "question": "여러번을 강조할 때 골백번이라고 흔히 말하는데 골은 10000을 뜻한다.",
+                        "answer": "O",
+                        "explanation": "이 정도는 맞춰줘야죠!"
+                    },
+                    4: { # 5번째 본 게임 라운드
+                        "question": "눈을 뜨고는 재체기를 할 수 없다.",
+                        "answer": "O",
+                        "explanation": "눈을 뜨고 재치기 하는 것은 거의 불가능에 가깝습니다."
+                    },
+                    5: { # 6번째 본 게임 라운드
+                        "question": "개미는 높은 곳에서 떨어지면 죽는다는 말이 틀렸다는 것을 부정하는 것은 옳지 않다.",
+                        "answer": "O",
+                        "explanation": "개미는 높은 곳에서 떨어져도 죽지 않아요"
+                    },
+                    6: { # 7번째 본 게임 라운드
+                        "question": "모티의 이름은 8월 12일에 지어졌다 라는 문장에 들어간 ㅇ의 개수는 8개이다.",
+                        "answer": "X",
+                        "explanation": "해당 문장에서 ㅇ은 총 7개입니다."
+                    }
+                }
 
                 # 백그라운드 스레드가 결과를 담을 컨테이너 생성
                 quiz_result_container = []
                 self.generated_quizzes = []
 
+                quiz_round_counter = 0
+                main_game_round_counter = 0
                 is_first_round = True
+                is_game_over = False
+                is_main_game_started = False
+                is_crazy_mode_active = False 
+
                 try:
                     self.raise_busy_signal()
                     self.shared_state['mode'] = 'ox_quiz'
-                    if self.emotion_queue: self.emotion_queue.put("THINKING")
-                    
                     self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
                     self.tts.wait()
                     self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
@@ -661,10 +688,12 @@ class PressToTalk:
                     )
                     quiz_fetch_thread.start()
 
-                    is_game_over = False
-                    is_main_game_started = False # 변수 대신 명확한 플래그 사용
-
                     while not is_game_over and not self.stop_event.is_set():
+                        if not is_first_round and not is_predefined:
+                            print("  - 🤔 다음 라운드 준비를 위해 THINKING 표정으로 변경")
+                            if self.emotion_queue: self.emotion_queue.put("THINKING")
+                            time.sleep(1) # 표정이 바뀔 시간 확보
+
                         quiz_data = None
                         is_predefined = False
 
@@ -689,29 +718,50 @@ class PressToTalk:
                                 self.tts.wait()
                                 is_main_game_started = True
 
-                            if self.generated_quizzes:
-                                quiz_data = self.generated_quizzes.pop(0)
-                                print(f"  - 사전 생성 퀴즈 사용: {quiz_data}")
+                            is_current_round_crazy = main_game_round_counter in crazy_mode_quizzes
+
+                            if is_current_round_crazy:
+                                if not is_crazy_mode_active:
+                                    print(f"미친 난위도 퀴즈 출제! (본 게임 {main_game_round_counter + 1} 라운드)")
+                                    if self.emotion_queue: self.emotion_queue.put("ANGRY")
+                                    self.tts.speak("후후후... 난위도 상승! 후후후... 이번엔 정말 어려울 거다...")
+                                    self.tts.wait()
+                                    is_crazy_mode_active = True # 상태를 '크레이지 모드'로 변경
+
+                                quiz_data = crazy_mode_quizzes[main_game_round_counter]
 
                             else:
-                                print("  - Gemini API로 새 퀴즈를 생성합니다.")
-                                quiz_prompt = (
-                                    "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
-                                    "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
-                                    "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
-                                    '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
-                                )
-                                try:
-                                    quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
-                                        quiz_prompt, 
-                                        generation_config={"response_mime_type": "application/json"}
+                                # 크레이지 모드였는데, 일반 문제로 돌아온 경우
+                                if is_crazy_mode_active:
+                                    print("일반 난이도로 돌아갑니다.")
+                                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+                                    is_crazy_mode_active = False # 상태를 '일반 모드'로 다시 변경
+
+                                if self.generated_quizzes:
+                                    quiz_data = self.generated_quizzes.pop(0)
+                                    print(f"  - 사전 생성 퀴즈 사용: {quiz_data}")
+
+                                else:
+                                    print("  - Gemini API 실시간 새 퀴즈를 생성합니다.")
+                                    quiz_prompt = (
+                                        "간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
+                                        "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
+                                        "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
+                                        '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
                                     )
-                                    raw_json = _extract_text(quiz_response)
-                                    quiz_data = json.loads(raw_json)
-                                    print(f"  - 생성된 퀴즈: {quiz_data}")
-                                except Exception as e:
-                                    print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
-                                    quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
+                                    try:
+                                        quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
+                                            quiz_prompt, 
+                                            generation_config={"response_mime_type": "application/json"}
+                                        )
+                                        raw_json = _extract_text(quiz_response)
+                                        quiz_data = json.loads(raw_json)
+                                        print(f"  - 생성된 퀴즈: {quiz_data}")
+                                    except Exception as e:
+                                        print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
+                                        quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
+
+                            main_game_round_counter += 1
 
                         if not is_predefined:
                             if not is_first_round:
@@ -721,9 +771,10 @@ class PressToTalk:
                             if random.random() < 0.5: # 50% 확률
                                 thinking_phrases = [
                                     "음... 어떤 문제를 내볼까?",
-                                    "히히 이거 재미있겠다",
+                                    "히히 이거 재미있겠다.",
                                     "이번에는 조금 어려울 수도 있어요."
                                     "과연 맞출 수 있을까요?"
+                                    "인간에겐 너무 어려웠나? 쉽게 갈까요?"
                                 ]
                                 # 위 리스트에서 무작위로 문장 하나를 선택하여 말합니다.
                                 self.tts.speak(random.choice(thinking_phrases))
@@ -735,6 +786,7 @@ class PressToTalk:
                         self.tts.wait()
                         for i in range(5, 0, -1):
                             self.tts.speak(str(i))
+                            time.sleep(0.1)
                         self.tts.wait()
 
                         command_to_send = {
@@ -780,10 +832,6 @@ class PressToTalk:
                                 
                                 # ✨ 표정을 보여주기 위해 3초간 기다립니다.
                                 time.sleep(3)
-                                
-                                print("  - 🤔 다음 라운드 준비를 위해 THINKING 표정으로 변경")
-                                if self.emotion_queue: self.emotion_queue.put("THINKING")
-                                time.sleep(1) # 다음 문제 시작 전 짧은 텀
                                 continue
 
                             elif winner_count == 1:
