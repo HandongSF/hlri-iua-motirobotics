@@ -31,9 +31,9 @@ class OxQuizGame:
                 base_options=base_options,
                 running_mode=vision.RunningMode.IMAGE,
                 num_faces=20,
-                min_face_detection_confidence=0.5,
-                min_face_presence_confidence=0.5,
-                min_tracking_confidence=0.5,
+                min_face_detection_confidence=0.3, # 💡 만약 인식률이 부족하면 이 값을 0.3으로 낮춰보세요.
+                min_face_presence_confidence=0.3,
+                min_tracking_confidence=0.3,
             )
             self.landmarker = vision.FaceLandmarker.create_from_options(options)
             print("✅ OX퀴즈용 얼굴 인식(FaceLandmarker) 모델 로딩 완료.")
@@ -68,17 +68,27 @@ class OxQuizGame:
                 time.sleep(0.05)
                 continue
 
+            # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+            # ✨ [솔루션 2 적용] 이미지 해상도를 1.5배 키워서 인식률을 높입니다.
             h, w = frame.shape[:2]
-            center_x = w // 2
+            upscaled_frame = cv2.resize(frame, (int(w * 1.5), int(h * 1.5)), interpolation=cv2.INTER_LINEAR)
+            
+            # 인식할 때 사용할 프레임의 높이, 너비를 다시 계산합니다.
+            h_up, w_up = upscaled_frame.shape[:2]
+            center_x = w_up // 2
+            
             left_count, right_count = 0, 0
 
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            # 원본 frame 대신 해상도를 높인 upscaled_frame을 모델에 입력합니다.
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(upscaled_frame, cv2.COLOR_BGR2RGB))
             detection_result = self.landmarker.detect(mp_image)
-
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+            
             if detection_result.face_landmarks:
                 for face_landmarks in detection_result.face_landmarks:
                     nose_landmark = face_landmarks[1]
-                    face_x_position = int(nose_landmark.x * w)
+                    # 좌표 계산 시 커진 이미지의 너비(w_up)를 기준으로 사용해야 합니다.
+                    face_x_position = int(nose_landmark.x * w_up)
                     
                     if face_x_position < center_x:
                         left_count += 1
