@@ -79,6 +79,43 @@ def start_dance(port: PortHandler, pkt: PacketHandler, lock, amp: int | None = N
     )
     _dance_thread.start()
     
+def _perform_shoulder_dance(pkt, port, lock):
+    """(수정) 사인파를 이용해 어깨를 부드럽게 흔드는 헬퍼 함수"""
+    print("🎶 부드러운 어깨 춤 시작...")
+
+    # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 리듬 조절 파라미터 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
+    dance_duration_sec = 4.0  # 어깨 춤을 출 총 시간 (초)
+    frequency_hz = 0.5        # 1초에 왕복하는 횟수 (리듬의 빠르기)
+    amplitude = C.SHOULDER_LEFT_POS - C.SHOULDER_CENTER_POS # 움직임의 폭
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+    with lock:
+        # 속도를 살짝 낮춰 더 부드럽게 만듭니다.
+        io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_PROFILE_VELOCITY, 250)
+
+    t0 = time.time()
+    while True:
+        t = time.time() - t0
+        if t > dance_duration_sec:
+            break
+
+        # 사인파 공식으로 현재 시간에 맞는 부드러운 위치 계산
+        offset = amplitude * math.sin(2.0 * math.pi * frequency_hz * t)
+        goal_pos = int(round(C.SHOULDER_CENTER_POS + offset))
+        
+        with lock:
+            io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, goal_pos)
+        
+        time.sleep(0.02) # 모터에 연속적인 명령을 주기 위한 짧은 딜레이
+
+    # 어깨 춤이 끝나면 정확히 중앙으로 복귀
+    with lock:
+        io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
+    time.sleep(0.5)
+    print("✅ 부드러운 어깨 춤 완료!")
+# ============================================================    
+
+
 def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int, emotion_queue):
     try:
         # --- [준비] 춤 모드로 전환하고 고개를 정면으로! ---
@@ -88,6 +125,9 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, home_pan)
             io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, home_tilt)
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
+        
+        _perform_shoulder_dance(pkt, port, lock)
+        time.sleep(0.25) # 다음 동작을 위해 잠시 대기
 
         # --- [안무 1단계] 몸 전체 왼쪽 회전 ---
         print("🤖 [안무 1단계] 몸 전체 왼쪽 회전 시작!")
@@ -353,7 +393,10 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
 
         print("✅ [안무 8단계] 완료!")
-
+        
+        _perform_shoulder_dance(pkt, port, lock)
+        time.sleep(0.25) # 다음 동작을 위해 잠시 대기
+        
     finally:
         shared_state['mode'] = 'tracking'
         if emotion_queue:
