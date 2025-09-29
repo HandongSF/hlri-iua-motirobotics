@@ -79,13 +79,13 @@ def start_dance(port: PortHandler, pkt: PacketHandler, lock, amp: int | None = N
     )
     _dance_thread.start()
     
-def _perform_shoulder_dance(pkt, port, lock):
-    """(수정) 사인파를 이용해 어깨를 부드럽게 흔드는 헬퍼 함수"""
-    print("🎶 부드러운 어깨 춤 시작...")
+def _perform_shoulder_dance(pkt, port, lock, duration_sec, frequency_hz, title):
+    """(수정) 사인파를 이용해 지정된 리듬으로 어깨를 흔드는 헬퍼 함수"""
+    print(f"🎶 {title} 시작! ({duration_sec}초, {frequency_hz}Hz)")
 
     # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 리듬 조절 파라미터 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-    dance_duration_sec = 4.0  # 어깨 춤을 출 총 시간 (초)
-    frequency_hz = 0.5        # 1초에 왕복하는 횟수 (리듬의 빠르기)
+    # dance_duration_sec = 4.0  <- 이제 외부 파라미터 사용
+    # frequency_hz = 0.5        <- 이제 외부 파라미터 사용
     amplitude = C.SHOULDER_LEFT_POS - C.SHOULDER_CENTER_POS # 움직임의 폭
     # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
@@ -96,24 +96,23 @@ def _perform_shoulder_dance(pkt, port, lock):
     t0 = time.time()
     while True:
         t = time.time() - t0
-        if t > dance_duration_sec:
+        if t > duration_sec: # 파라미터로 받은 지속시간 사용
             break
 
         # 사인파 공식으로 현재 시간에 맞는 부드러운 위치 계산
-        offset = amplitude * math.sin(2.0 * math.pi * frequency_hz * t)
+        offset = amplitude * math.sin(2.0 * math.pi * frequency_hz * t) # 파라미터로 받은 빠르기 사용
         goal_pos = int(round(C.SHOULDER_CENTER_POS + offset))
         
         with lock:
             io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, goal_pos)
         
-        time.sleep(0.02) # 모터에 연속적인 명령을 주기 위한 짧은 딜레이
+        time.sleep(0.02)
 
     # 어깨 춤이 끝나면 정확히 중앙으로 복귀
     with lock:
         io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
     time.sleep(0.5)
-    print("✅ 부드러운 어깨 춤 완료!")
-# ============================================================    
+    print(f"✅ {title} 완료!")
 
 
 def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int, emotion_queue):
@@ -126,7 +125,7 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, home_tilt)
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
         
-        _perform_shoulder_dance(pkt, port, lock)
+        _perform_shoulder_dance(pkt, port, lock, duration_sec=4.0, frequency_hz=0.5, title="오프닝 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
 
         # --- [안무 1단계] 몸 전체 왼쪽 회전 ---
@@ -191,7 +190,7 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_MIDDLE_POS)
         time.sleep(0.35) # <<< 시간 0.7 -> 0.35
 
-        print("  - 팔/손 액션 위치로 이동!")
+        print(" - 팔/손 액션 위치로 이동!")
         with lock:
             io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_VELOCITY, 600) # <<< 속도 2배
             io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_VELOCITY, 600)  # <<< 속도 2배
@@ -300,7 +299,7 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         with lock:
             io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_PROFILE_VELOCITY, shoulder_speed)
 
-        for i in range(6):
+        for i in range(3):
             print(f" - 어깨 춤: {i + 1}번째")
             with lock:
                 io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_RIGHT_POS)
@@ -394,7 +393,8 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
 
         print("✅ [안무 8단계] 완료!")
         
-        _perform_shoulder_dance(pkt, port, lock)
+        # 피날레: 3초간 1.2Hz의 빠르고 역동적인 리듬으로 어깨 춤
+        _perform_shoulder_dance(pkt, port, lock, duration_sec=3.0, frequency_hz=1.2, title="피날레 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
         
     finally:
