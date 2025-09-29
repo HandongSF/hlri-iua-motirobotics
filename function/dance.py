@@ -21,6 +21,17 @@ import time, math, threading
 from dynamixel_sdk import PortHandler, PacketHandler
 from . import config as C, dxl_io as io
 from . import wheel
+import pygame
+import time
+import os
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
+MUSIC_FILE = os.path.join(base_dir, "SODA_POP.mp3")
+START_SECONDS = 50  # 재생 시작 지점 (50초)
+PLAY_DURATION = 50  # 재생할 시간 (50초)
+
+pygame.init()
+pygame.mixer.init()
 
 _dance_event = threading.Event()
 _dance_thread = None
@@ -51,6 +62,13 @@ def play_rps_motion(port: PortHandler, pkt: PacketHandler, lock):
 
     print("✅ 가위바위보 팔 동작 완료.")
 # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+def _music_stopper(duration_sec):
+    """지정된 시간(초)만큼 기다린 후 음악을 정지시키는 함수"""
+    print(f"⏰ 음악 타이머 시작: {duration_sec}초 후에 음악을 정지합니다.")
+    time.sleep(duration_sec)
+    pygame.mixer.music.stop()
+    print("🛑 음악 타이머에 의해 재생이 종료되었습니다.")
 
 def _worker(port: PortHandler, pkt: PacketHandler, lock, origin: int, amp: int, hz: float):
     t0 = time.perf_counter()
@@ -125,6 +143,15 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, home_tilt)
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
         
+        # 음악 준비
+        pygame.mixer.music.load(MUSIC_FILE)
+
+        print(f"{START_SECONDS}초부터 {PLAY_DURATION}초 동안 음악을 재생합니다.")
+        pygame.mixer.music.play(start=START_SECONDS)
+
+        stopper_thread = threading.Thread(target=_music_stopper, args=(PLAY_DURATION,), daemon=True)
+        stopper_thread.start()
+
         _perform_shoulder_dance(pkt, port, lock, duration_sec=4.0, frequency_hz=0.5, title="오프닝 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
 
@@ -396,8 +423,9 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         # 피날레: 3초간 1.2Hz의 빠르고 역동적인 리듬으로 어깨 춤
         _perform_shoulder_dance(pkt, port, lock, duration_sec=3.0, frequency_hz=1.2, title="피날레 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
-        
+
     finally:
+        pygame.mixer.music.stop()
         shared_state['mode'] = 'tracking'
         if emotion_queue:
             emotion_queue.put("NEUTRAL")
