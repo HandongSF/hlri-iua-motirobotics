@@ -17,7 +17,6 @@
 # ============================================================
 
 # rock_paper.py
-
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -29,7 +28,6 @@ import os # os 모듈 추가
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 1. 수정된 부분 (A) ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
 # 클래스로 전체 로직을 캡슐화하여 모델 로딩을 한 번만 수행하도록 변경합니다.
 class RockPaperGame:
     def __init__(self, command_q: queue.Queue, result_q: queue.Queue, video_frame_q: queue.Queue):
@@ -75,7 +73,6 @@ class RockPaperGame:
             except queue.Empty:
                 break
 
-
         best_gesture = "None"
         max_confidence_score = 0.0
         recognition_started = False
@@ -111,7 +108,7 @@ class RockPaperGame:
                 continue
 
         if best_gesture == "None":
-            self.result_q.put("제스처를 인식하지 못했어요.")
+            self.result_q.put("아고! 실수로 눈을 감아 인식을 못했어요. 죄송해요.")
             return
 
         user_choice_map = {"Victory": "Scissors", "Closed_Fist": "Rock", "Open_Palm": "Paper"}
@@ -153,8 +150,6 @@ class RockPaperGame:
     def stop(self):
         self.stop_event.set()
 
-# 워커 함수를 클래스를 사용하도록 수정
 def rock_paper_game_worker(command_q: queue.Queue, result_q: queue.Queue, video_frame_q: queue.Queue):
     game = RockPaperGame(command_q, result_q, video_frame_q)
     game.start_worker()
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲

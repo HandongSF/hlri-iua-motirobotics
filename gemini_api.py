@@ -1,20 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
 # gemini_api.py
 
 from __future__ import annotations
@@ -931,6 +914,7 @@ class PressToTalk:
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
                 try:
                     self.raise_busy_signal() 
+                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
                     self.tts.speak("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
                     time.sleep(1)
                     final_game_result = ""
@@ -948,20 +932,35 @@ class PressToTalk:
                         self.tts.speak("보!")
                         self.tts.wait()
 
+                        if self.emotion_queue: self.emotion_queue.put("THINKING")
                         game_result = ""
                         try:
                             game_result = self.rps_result_q.get(timeout=20)
                             print(f"게임 결과 수신: {game_result}")
+
+                            # ✨ 게임 결과에 따라 표정 변화 추가
+                            if "당신이 이겼어요" in game_result:
+                                if self.emotion_queue: self.emotion_queue.put("SAD")
+                            elif "제가 이겼네요" in game_result:
+                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                            elif "비겼네요" in game_result:
+                                if self.emotion_queue: self.emotion_queue.put("SURPRISED")
+
                             self.tts.speak(game_result)
-                            time.sleep(1)
+                            self.tts.wait()
+                            time.sleep(2) # 표정을 보여주기 위해 잠시 대기
+
                         except queue.Empty:
+                            if self.emotion_queue: self.emotion_queue.put("TENDER")
                             print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
-                            game_result = "제스처를 인식하지 못했어요."
+                            game_result = "아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요."
                             self.tts.speak(game_result)
+                            self.tts.wait()
+                            time.sleep(2)
                         
                         final_game_result = game_result
                         
-                        if "비겼" in game_result or "인식하지 못했어요" in game_result:
+                        if "비겼" in game_result or "아고! 실수로 눈을" in game_result:
                             self.tts.speak("다시 한 번 할게요!")
                             time.sleep(2)
                             continue 
