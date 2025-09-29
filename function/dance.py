@@ -27,8 +27,8 @@ import os
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 MUSIC_FILE = os.path.join(base_dir, "SODA_POP.mp3")
-START_SECONDS = 50  # 재생 시작 지점 (50초)
-PLAY_DURATION = 50  # 재생할 시간 (50초)
+START_SECONDS = 55  # 재생 시작 지점 (50초)
+PLAY_DURATION = 40  # 재생할 시간 (50초)
 
 pygame.init()
 pygame.mixer.init()
@@ -152,7 +152,8 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         stopper_thread = threading.Thread(target=_music_stopper, args=(PLAY_DURATION,), daemon=True)
         stopper_thread.start()
 
-        _perform_shoulder_dance(pkt, port, lock, duration_sec=4.0, frequency_hz=0.5, title="오프닝 어깨 춤")
+        _perform_shoulder_dance(pkt, port, lock, duration_sec=8.0, frequency_hz=0.5, title="오프닝 어깨 춤")
+        _perform_shoulder_dance(pkt, port, lock, duration_sec=4.5, frequency_hz=1, title="고조되는 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
 
         # --- [안무 1단계] 몸 전체 왼쪽 회전 ---
@@ -417,11 +418,17 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
 
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
+        
+        with lock:
+            print(" - 원위치!")
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_DOWN_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_DOWN_POS)
+        time.sleep(arm_wait_time)
 
         print("✅ [안무 8단계] 완료!")
         
         # 피날레: 3초간 1.2Hz의 빠르고 역동적인 리듬으로 어깨 춤
-        _perform_shoulder_dance(pkt, port, lock, duration_sec=3.0, frequency_hz=1.2, title="피날레 어깨 춤")
+        _perform_shoulder_dance(pkt, port, lock, duration_sec=11.0, frequency_hz=1, title="피날레 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
 
     finally:
