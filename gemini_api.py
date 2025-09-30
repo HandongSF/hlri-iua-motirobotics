@@ -676,7 +676,7 @@ class PressToTalk:
                 predefined_quizzes = [
                     {"question": "제 이름은 모터입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
                     {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
-                    {"question": "모티는 나름 유명한 유튜버이다", "answer": "O", "explanation": "구독과 좋아요! 알림 설정까지 꾸욱 눌러주세요~!"},
+                    {"question": "모티는 나름 유명한 유튜버이다", "answer": "O", "explanation": "구독과 좋아요! 알림 설정까지 꾸욱 눌러주세요!"},
                 ]
 
                 crazy_mode_quizzes = {
@@ -953,23 +953,26 @@ class PressToTalk:
                             if self.emotion_queue: self.emotion_queue.put("HAPPY")
                         elif "비겼네요" in game_result:
                             if self.emotion_queue: self.emotion_queue.put("SURPRISED")
-
                             
                         time.sleep(2) # 표정을 보여주기 위해 잠시 대기
 
-                        if "비겼" in game_result or "아고! 실수로 눈을" in game_result:
-                            self.tts.speak("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요.")
-                            self.tts.wait()
-                            self.tts.speak("다시 한 번 할게요!")
+                        if "비겼" in game_result:
+                            self.tts.speak(f"{game_result} 다시 한 번 할게요!")
+                            self.tts.wait()                              
+                            time.sleep(2)
+                            continue
+
+                        elif "아고! 실수로 눈을" in game_result:
+                            self.tts.speak("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요. 다시 한 번 할게요!")
                             self.tts.wait()                              
                             time.sleep(2)
                             continue
     
                         elif "이겼" in game_result:
                             if "제가 이겼네요"  in game_result:
-                                self.tts.speak(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요~")
+                                self.tts.speak(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요")
                             else:
-                                self.tts.speak(f"{game_result} 까비~! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
+                                self.tts.speak(f"{game_result} 까비! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
                             
                             self.tts.wait()
 
@@ -995,6 +998,27 @@ class PressToTalk:
             
         except Exception as e: print(f"❌ 처리 실패: {e}\n")
 
+    def _speak_farewell(self):
+        try:
+            self.raise_busy_signal()
+            print("💡 'l' 키 입력 감지. 작별 인사를 시작합니다.")
+            farewell_text = (
+                "여러분 지금까지 저와 함께 좋은 시간을 보내주셔서 너무 감사드려요. "
+                "벌써 헤어져야 하는 시간이 됐어요. 아쉬워라! "
+                "지금 보이시는 QR에 들어가셔서 설문조사 해주세요. "
+                "여러분의 작은 목소리가 저에게 큰 힘이 될거에요. "
+                "앞으로 더욱 씩씩하고 멋지게 성장한 모티의 모습이 보고 싶으시면 많은 관심과 사랑 부탁드려요. "
+                "여러분! 시험 공부 끝까지 포기하지 말고 힘내셔서 좋은 성과 있으시길 바라요. 그럼 다음에 또 돌아올게요! "
+                "지금까지 저는 여러분의 공감 서비스 로봇, 모티! 모티였습니다!"
+            )
+            self.tts.speak(farewell_text)
+            self.tts.wait()
+            print("작별 인사 완료. 1초 후 프로그램을 종료합니다.")
+            time.sleep(1)
+            
+        finally:
+            self.lower_busy_signal()
+            
     def _on_press(self, key):
         if self.stop_event.is_set(): return False
         try:
@@ -1010,6 +1034,10 @@ class PressToTalk:
 
             elif key == keyboard.KeyCode.from_char('p'):
                 self.toggle_announcement()
+
+            elif key == keyboard.KeyCode.from_char('l'):
+                print("💡 'l' 키 입력 감지. 작별 인사를 시작합니다.")
+                threading.Thread(target=self._speak_farewell, daemon=True).start()
 
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
