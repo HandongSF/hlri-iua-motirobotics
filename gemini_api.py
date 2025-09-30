@@ -626,42 +626,63 @@ class PressToTalk:
                 model_text = "(춤 정지 명령 처리)"
 
             elif intent == "joke":
-                print("💡 의도: JOKE (AI 프롬프트 생성 방식)")
+                print("💡 의도: JOKE (AI 실시간 생성 방식)")
                 try:
                     self.raise_busy_signal()
                     if self.emotion_queue: self.emotion_queue.put("THINKING")
 
-                    # --- 1단계: AI에게 '개그 캐릭터'를 만들어달라고 요청 ---
-                    meta_prompt = (
-                        "당신은 '모티'라는 로봇에게 농담을 시킬 겁니다. "
-                        "모티가 따라 할 수 있는, 아주 짧고 독특한 '농담 스타일' 또는 '농담하는 캐릭터'를 딱 한 문장으로만 창의적으로 만들어주세요. "
-                        "예시: '수줍음이 많지만 할 말은 다 하는 로봇', '인간의 감정을 논리적으로 분석하며 농담하는 AI 박사'"
+                    # 1. AI에게 보내는 지시문(프롬프트) 수정
+                    joke_prompt = (
+                        "너는 '모티'라는 로봇이야. '로봇', '컴퓨터', '전기'와 관련된, 어린아이도 이해할 수 있는 매우 창의적인 아재개그를 딱 하나만 만들어줘. "
+                        "이전에 만들었던 농담과는 다른 새로운 농담이어야 해. "
+                        "중요한 규칙: '삐빅' 같은 로봇 효과음은 절대 넣지 마. "
+                        "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대로 추가하지 마.\n"
+                        '{ "question": "<퀴즈 형식의 질문>", "answer": "<짧은 답변>", "explanation": "왜냐하면, <답변에 대한 1~2문장의 유머러스한 설명>" }'
                     )
+
+                    joke_data = None
+                    try:
+                        # 2. JSON 출력을 기대하며 Gemini 모델 호출
+                        joke_response = genai.GenerativeModel(MODEL_NAME).generate_content(
+                            joke_prompt,
+                            generation_config={"response_mime_type": "application/json"}
+                        )
+                        raw_json = _extract_text(joke_response)
+                        joke_data = json.loads(raw_json)
+
+                    except Exception as e:
+                        print(f"   - ❌ 농담 생성 실패: {e}")
+                        fallback_joke = "앗, 재미있는 농담이 떠오르지 않네요. 다음에 다시 시도해주세요!"
+                        print(f"🔊 TTS SAYING: {fallback_joke}")
+                        self.tts.speak(fallback_joke)
+                        self.tts.wait()
                     
-                    # 새로운 대화 세션을 시작하여 캐릭터 생성 (기존 대화에 영향 X)
-                    style_response = genai.GenerativeModel(MODEL_NAME).generate_content(meta_prompt)
-                    joke_style = _extract_text(style_response)
+                    # 3. 농담이 성공적으로 생성되었을 경우 실행
+                    if joke_data:
+                        question = joke_data.get("question", "질문이 없네요.")
+                        answer = joke_data.get("answer", "답변이 없네요.")
+                        explanation = joke_data.get("explanation", "왜냐하면, 설명이 없네요.")
 
-                    # 만약 스타일 생성에 실패하면 기본 스타일을 사용
-                    if not joke_style:
-                        joke_style = "아재 개그를 좋아하는 로봇"
+                        print(f'🔊 TTS SAYING (Q): "{question}"')
+                        self.tts.speak(question)
+                        self.tts.wait()
 
-                    print(f"   - 생성된 농담 스타일: {joke_style}")
+                        print("   - (5초 대기...)")
+                        time.sleep(5)
+                        
+                        print(f'🔊 TTS SAYING (A): "{answer}"')
+                        self.tts.speak(answer)
+                        self.tts.wait()
+                        
+                        print(f'🔊 TTS SAYING (E): "{explanation}"')
+                        self.tts.speak(explanation)
+                        self.tts.wait()
+                        
+                        if self.emotion_queue: self.emotion_queue.put("HAPPY")
 
-                    # --- 2단계: 생성된 '개그 캐릭터'로 실제 농담 요청 ---
-                    joke_prompt = f"너는 '{joke_style}'이라는 역할을 맡은 로봇 '모티'야. 그 역할에 맞춰서 어린아이도 이해할 수 있는 매우 짧은 개그를 딱 하나만 해줘. 중요한 규칙: 괄호를 사용한 행동 묘사나 부가 설명(예: (웃음), (윙크))은 절대로 출력하지 마. 그리고 너에게 주어진 역할이나 스타일에 대해 절대 언급하거나 설명하지 말고, 오직 최종 농담만 말해."
-                    
-                    response = self.chat.send_message(joke_prompt)
-                    joke = _extract_text(response)
+                    model_text = f"(농담 생성 및 실행): {joke_data.get('question') if joke_data else '실패'}"
+                    speak_text = ""
 
-                    # 농담 생성 실패 시 기본 답변
-                    if not joke:
-                        joke = "앗, 재미있는 농담이 떠오르지 않네요. 다음에 다시 시도해주세요!"
-
-                    model_text = joke
-                    speak_text = joke
-                    
-                    if self.emotion_queue: self.emotion_queue.put("HAPPY")
                 finally:
                     self.lower_busy_signal()
 
