@@ -39,6 +39,7 @@ from .emotions.surprised import Emotion as SurprisedEmotion
 from .emotions.thinking import Emotion as ThinkingEmotion
 from .emotions.sleepy import Emotion as SleepyEmotion
 from .emotions.wake import Emotion as WakeEmotion
+from .emotions.close import Emotion as CloseEmotion
 from .emotions import eyebrow
 from .emotions import cheeks
 from dotenv import load_dotenv
@@ -104,7 +105,7 @@ class RobotFaceApp:
             "NEUTRAL": NeutralEmotion(), "HAPPY": HappyEmotion(), "EXCITED": ExcitedEmotion(),
             "TENDER": TenderEmotion(), "SCARED": ScaredEmotion(), "ANGRY": AngryEmotion(), 
             "SAD": SadEmotion(), "SURPRISED": SurprisedEmotion(), "THINKING": ThinkingEmotion(), 
-            "SLEEPY": SleepyEmotion(), "WAKE": WakeEmotion()
+            "SLEEPY": SleepyEmotion(), "WAKE": WakeEmotion(), "CLOSE": CloseEmotion()
         }
         self.current_emotion_key = "NEUTRAL"
 
@@ -153,7 +154,8 @@ class RobotFaceApp:
                 key_map = {
                     pygame.K_1: "NEUTRAL", pygame.K_2: "HAPPY", pygame.K_3: "EXCITED",
                     pygame.K_4: "TENDER", pygame.K_5: "SCARED", pygame.K_6: "ANGRY",
-                    pygame.K_7: "SAD", pygame.K_8: "SURPRISED", pygame.K_9: "THINKING", 
+                    pygame.K_7: "SAD", pygame.K_8: "SURPRISED", pygame.K_9: "THINKING",
+                    pygame.K_0: "CLOSE", 
                 }
                 if event.key in key_map: self.change_emotion(key_map[event.key])
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:

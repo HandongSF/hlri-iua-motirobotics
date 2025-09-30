@@ -900,6 +900,8 @@ class PressToTalk:
                             is_game_over = True
                     
                     self.tts.wait()
+
+                    self.tts.speak("최후의 생존자와 가위바위보 게임을 진행할게요! 만약 여기서 이기시면 어마무시한 선물을 드리도록 하겠습니다! 하지만 패배하시면 벌칙을 받게 될거에요! 마음의 준비가 되시면 가위바위보라고 말씀해주세요!")
                     
                     model_text = "OX 퀴즈 게임 종료."
 
@@ -922,6 +924,7 @@ class PressToTalk:
                     while True: 
                         if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
                         self.rps_command_q.put("START_GAME")
+                        if self.emotion_queue: self.emotion_queue.put("THINKING")
                         self.tts.speak("준비하시고...")
                         self.tts.wait()
 
@@ -932,43 +935,57 @@ class PressToTalk:
                         self.tts.speak("보!")
                         self.tts.wait()
 
-                        if self.emotion_queue: self.emotion_queue.put("THINKING")
                         game_result = ""
                         try:
                             game_result = self.rps_result_q.get(timeout=20)
                             print(f"게임 결과 수신: {game_result}")
-
-                            # ✨ 게임 결과에 따라 표정 변화 추가
-                            if "당신이 이겼어요" in game_result:
-                                if self.emotion_queue: self.emotion_queue.put("SAD")
-                            elif "제가 이겼네요" in game_result:
-                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
-                            elif "비겼네요" in game_result:
-                                if self.emotion_queue: self.emotion_queue.put("SURPRISED")
-
-                            self.tts.speak(game_result)
-                            self.tts.wait()
-                            time.sleep(2) # 표정을 보여주기 위해 잠시 대기
-
+                        
                         except queue.Empty:
-                            if self.emotion_queue: self.emotion_queue.put("TENDER")
                             print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
                             game_result = "아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요."
-                            self.tts.speak(game_result)
-                            self.tts.wait()
-                            time.sleep(2)
-                        
-                        final_game_result = game_result
-                        
+
+                        # ✨ 게임 결과에 따라 표정 변화 추가
+                        if "아고! 실수로 눈을" in game_result:
+                            if self.emotion_queue: self.emotion_queue.put("CLOSE")
+                        elif "당신이 이겼어요" in game_result:
+                            if self.emotion_queue: self.emotion_queue.put("SAD")
+                        elif "제가 이겼네요" in game_result:
+                            if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                        elif "비겼네요" in game_result:
+                            if self.emotion_queue: self.emotion_queue.put("SURPRISED")
+
+                            
+                        time.sleep(2) # 표정을 보여주기 위해 잠시 대기
+
                         if "비겼" in game_result or "아고! 실수로 눈을" in game_result:
+                            self.tts.speak("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요.")
+                            self.tts.wait()
                             self.tts.speak("다시 한 번 할게요!")
+                            self.tts.wait()                              
                             time.sleep(2)
-                            continue 
+                            continue
+    
+                        elif "이겼" in game_result:
+                            if "제가 이겼네요"  in game_result:
+                                self.tts.speak(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요~")
+                            else:
+                                self.tts.speak(f"{game_result} 까비~! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
+                            
+                            self.tts.wait()
+
+                            print("💡 게임 결과에 따라 DANCE START 의도 실행")
+
+                            if callable(self.start_dance_cb):
+                                self.start_dance_cb()
+                                starts_dance = True # 춤이 시작되었음을 표시
+                            break
+
                         else:
                             self.tts.speak("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
                             break
                 finally:
-                    self.lower_busy_signal()
+                    if not starts_dance:
+                        self.lower_busy_signal()
                 
                     model_text = f"게임 종료. 최종 결과: {final_game_result}"
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
