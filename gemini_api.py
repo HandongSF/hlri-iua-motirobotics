@@ -630,7 +630,7 @@ class PressToTalk:
                 try:
                     self.raise_busy_signal()
                     if self.emotion_queue: self.emotion_queue.put("THINKING")
-                    self.tts.speak("위잉- 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
+                    self.tts.speak("위잉 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
                     self.tts.wait()
                     # 1. AI에게 보내는 지시문(프롬프트) 수정
                     joke_prompt = (
