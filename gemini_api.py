@@ -630,7 +630,8 @@ class PressToTalk:
                 try:
                     self.raise_busy_signal()
                     if self.emotion_queue: self.emotion_queue.put("THINKING")
-
+                    self.tts.speak("위잉- 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
+                    self.tts.wait()
                     # 1. AI에게 보내는 지시문(프롬프트) 수정
                     joke_prompt = (
                         "너는 '모티'라는 로봇이야. '로봇', '컴퓨터', '전기'와 관련된, 어린아이도 이해할 수 있는 매우 창의적인 아재개그를 딱 하나만 만들어줘. "
@@ -662,7 +663,7 @@ class PressToTalk:
                         question = joke_data.get("question", "질문이 없네요.")
                         answer = joke_data.get("answer", "답변이 없네요.")
                         explanation = joke_data.get("explanation", "왜냐하면, 설명이 없네요.")
-
+                        
                         print(f'🔊 TTS SAYING (Q): "{question}"')
                         self.tts.speak(question)
                         self.tts.wait()
@@ -674,12 +675,12 @@ class PressToTalk:
                         self.tts.speak(answer)
                         self.tts.wait()
                         
+                        if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                        
                         print(f'🔊 TTS SAYING (E): "{explanation}"')
                         self.tts.speak(explanation)
                         self.tts.wait()
                         
-                        if self.emotion_queue: self.emotion_queue.put("HAPPY")
-
                     model_text = f"(농담 생성 및 실행): {joke_data.get('question') if joke_data else '실패'}"
                     speak_text = ""
 
