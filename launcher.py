@@ -43,6 +43,7 @@ from gemini_api import PressToTalk
 from display.main import run_face_app
 from function.rock_paper import rock_paper_game_worker
 from function.ox_game import ox_quiz_game_worker
+from display.subtitle import subtitle_window_process
 
 def _get_env(name: str, default: str) -> str:
     v = os.environ.get(name)
@@ -84,7 +85,7 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q,ox_result_q):
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, subtitle_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q,ox_result_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -92,6 +93,7 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, ho
             stop_dance_cb=stop_dance_cb,
             play_rps_motion_cb=play_rps_motion_cb,
             emotion_queue=emotion_queue,
+            subtitle_queue=subtitle_queue,
             hotword_queue=hotword_queue,
             stop_event=stop_event,
             rps_command_q=rps_command_q,
@@ -121,6 +123,16 @@ def main():
     video_frame_q = queue.Queue(maxsize=1)
     sleepy_event = threading.Event()
     shared_state = {'mode': 'tracking'}
+
+    subtitle_q = multiprocessing.Queue()
+    subtitle_proc = multiprocessing.Process(
+        target=subtitle_window_process,
+        args=(subtitle_q,),
+        name="subtitle_window",
+        daemon=True
+    )
+    subtitle_proc.start()
+    print("▶ Subtitle Window 프로세스 시작")
     
     def _handle_sigint(sig, frame):
         print("\n🛑 SIGINT(Ctrl+C) 감지 → 종료 신호 보냄")
@@ -157,7 +169,7 @@ def main():
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q),
+        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q),
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(
@@ -202,6 +214,10 @@ def main():
     finally:
         if not stop_event.is_set(): stop_event.set()
         print("▶ 모든 스레드 종료 대기 중...")
+        if subtitle_q:
+            subtitle_q.put("__QUIT__")
+        if subtitle_proc:
+            subtitle_proc.join(timeout=3)
         t_ptt.join(timeout=10.0)
         t_visual_face.join(timeout=15.0)
         t_face.join(timeout=3.0)
@@ -211,5 +227,6 @@ def main():
         _graceful_shutdown(port, pkt, dxl_lock)
         print("■ launcher 정상 종료")
         
-if __name__ == "__main__":                                     
+if __name__ == "__main__":  
+    multiprocessing.freeze_support()                                   
     main()
