@@ -1,3 +1,20 @@
+# ============================================================
+#Licensed to the Apache Software Foundation (ASF) under one
+#or more contributor license agreements.  See the NOTICE file
+#distributed with this work for additional information
+#regarding copyright ownership.  The ASF licenses this file
+#to you under the Apache License, Version 2.0 (the
+#"License"); you may not use this file except in compliance
+#with the License.  You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+# ============================================================
 # gemini_api.py
 
 from __future__ import annotations
@@ -322,6 +339,7 @@ class PressToTalk:
                  stop_dance_cb: Optional[Callable[[], None]] = None,
                  play_rps_motion_cb: Optional[Callable[[], None]] = None,
                  emotion_queue: Optional[queue.Queue] = None,
+                 subtitle_queue: Optional[multiprocessing.Queue] = None, 
                  hotword_queue: Optional[queue.Queue] = None,
                  stop_event: Optional[threading.Event] = None,
                  rps_command_q: Optional[multiprocessing.Queue] = None,
@@ -362,6 +380,7 @@ class PressToTalk:
         self.stop_dance_cb  = stop_dance_cb
         self.play_rps_motion_cb = play_rps_motion_cb
         self.emotion_queue = emotion_queue
+        self.subtitle_queue = subtitle_queue
         self.hotword_queue = hotword_queue
         self.stop_event = stop_event or threading.Event()
         
@@ -401,6 +420,25 @@ class PressToTalk:
         self.stop_announcement_event = threading.Event()
         self.announcement_active = False
 
+    def _speak_and_subtitle(self, text_data: str | dict):
+        """TTS 출력과 자막 전송을 동시에 처리하는 헬퍼 함수"""
+        if not text_data:
+            return
+
+        # 입력값이 딕셔너리일 경우 'text' 키의 값을, 문자열일 경우 그대로 사용
+        text_to_display = ""
+        if isinstance(text_data, dict):
+            text_to_display = text_data.get("text", "")
+        else:
+            text_to_display = str(text_data)
+
+        # 자막 큐가 존재하고, 표시할 텍스트가 있으면 큐에 넣음
+        if self.subtitle_queue and text_to_display:
+            self.subtitle_queue.put(text_to_display)
+        
+        # TTS로 음성 출력
+        self.tts.speak(text_data)
+        
     def _announcement_worker(self):
         # 안내 방송을 60초마다 반복하는 스레드 워커 함수입니다
         announcement_text = "한동의 미남 미녀 여러분 안녕하세요. 잠시만 주목해주세요! 30분부터 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요. "
@@ -1016,7 +1054,11 @@ class PressToTalk:
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
             
             print(f"[{ts}] [Gemini] {model_text}\n")
-            if speak_text: self.tts.speak(speak_text)
+            if speak_text: 
+                if self.subtitle_queue:
+                    self.subtitle_queue.put(speak_text)
+
+                self.tts.speak(speak_text)
             
         except Exception as e: print(f"❌ 처리 실패: {e}\n")
 
