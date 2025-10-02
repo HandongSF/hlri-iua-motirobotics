@@ -406,7 +406,7 @@ class PressToTalk:
         self.state = RecorderState()
         self._print_intro()
         if ENABLE_GREETING:
-            self.tts.speak(GREETING_TEXT)
+            self._speak_and_subtitle(GREETING_TEXT)
             if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
 
         self.sleepy_event = sleepy_event
@@ -445,7 +445,7 @@ class PressToTalk:
         print("📢 안내 방송 스레드가 시작되었습니다.")
         try:
             while not self.stop_announcement_event.is_set():
-                self.tts.speak(announcement_text)
+                self._speak_and_subtitle(announcement_text)
                 interrupted = self.stop_announcement_event.wait(timeout=60.0)
                 if interrupted:
                     break
@@ -668,7 +668,7 @@ class PressToTalk:
                 try:
                     self.raise_busy_signal()
                     if self.emotion_queue: self.emotion_queue.put("THINKING")
-                    self.tts.speak("위잉 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
+                    self._speak_and_subtitle("위잉 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
                     self.tts.wait()
                     # 1. AI에게 보내는 지시문(프롬프트) 수정
                     joke_prompt = (
@@ -693,7 +693,7 @@ class PressToTalk:
                         print(f"   - ❌ 농담 생성 실패: {e}")
                         fallback_joke = "앗, 재미있는 농담이 떠오르지 않네요. 다음에 다시 시도해주세요!"
                         print(f"🔊 TTS SAYING: {fallback_joke}")
-                        self.tts.speak(fallback_joke)
+                        self._speak_and_subtitle(fallback_joke)
                         self.tts.wait()
                     
                     # 3. 농담이 성공적으로 생성되었을 경우 실행
@@ -703,20 +703,20 @@ class PressToTalk:
                         explanation = joke_data.get("explanation", "왜냐하면, 설명이 없네요.")
                         
                         print(f'🔊 TTS SAYING (Q): "{question}"')
-                        self.tts.speak(question)
+                        self._speak_and_subtitle(question)
                         self.tts.wait()
 
                         print("   - (5초 대기...)")
                         time.sleep(5)
                         
                         print(f'🔊 TTS SAYING (A): "{answer}"')
-                        self.tts.speak(answer)
+                        self._speak_and_subtitle(answer)
                         self.tts.wait()
                         
                         if self.emotion_queue: self.emotion_queue.put("HAPPY")
                         
                         print(f'🔊 TTS SAYING (E): "{explanation}"')
-                        self.tts.speak(explanation)
+                        self._speak_and_subtitle(explanation)
                         self.tts.wait()
                         
                     model_text = f"(농담 생성 및 실행): {joke_data.get('question') if joke_data else '실패'}"
@@ -729,7 +729,7 @@ class PressToTalk:
                 print("💡 의도: OX QUIZ GAME (라운드 방식)")
 
                 if not self.shared_state or not self.ox_command_q:
-                    self.tts.speak("시스템 오류로 퀴즈를 진행할 수 없어요.")
+                    self._speak_and_subtitle("시스템 오류로 퀴즈를 진행할 수 없어요.")
                     print("❌ shared_state 또는 ox_command_q가 없어 모드 전환 불가")
                     return
                 
@@ -777,14 +777,14 @@ class PressToTalk:
                     self.raise_busy_signal()
                     self.shared_state['mode'] = 'ox_quiz'
                     # 진행모드
-                    self.tts.speak("안녕하세요 한동의 미남 미녀 여러분! 저는 따뜻한 공감이 필요한 여러분을 위해 태어난 로봇! 모티입니다. 7주차 시험 기간 다들 정말 고생 많으시죠?.. 밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 짠해요. 괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? 복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!")    
+                    self._speak_and_subtitle("안녕하세요 한동의 미남 미녀 여러분! 저는 따뜻한 공감이 필요한 여러분을 위해 태어난 로봇! 모티입니다. 7주차 시험 기간 다들 정말 고생 많으시죠?.. 밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 짠해요. 괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? 복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!")    
                     self.tts.wait()
-                    self.tts.speak("그럼 지금부터 여러분과 OX 퀴즈 게임을 시작하겠습니다!")
+                    self._speak_and_subtitle("그럼 지금부터 여러분과 OX 퀴즈 게임을 시작하겠습니다!")
 
                     # 기존모드
                     # self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
                     self.tts.wait()
-                    self.tts.speak("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
+                    self._speak_and_subtitle("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
                     self.tts.wait()
 
                      # 백그라운드에서 퀴즈 생성을 시작시킴
@@ -806,11 +806,11 @@ class PressToTalk:
                         if quiz_round_counter < len(predefined_quizzes):
                             quiz_data = predefined_quizzes[quiz_round_counter]
                             is_predefined = True 
-                            print(f"  - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
+                            print(f" - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
                             quiz_round_counter += 1
                         else:
                             if not is_main_game_started: # "본 게임 시작" 안내는 한 번만 하도록 수정
-                                self.tts.speak("자, 이제 연습이 끝났습니다! 지금부터 본격적으로 시작하겠습니다.")
+                                self._speak_and_subtitle("자, 이제 연습이 끝났습니다! 지금부터 본격적으로 시작하겠습니다.")
                                 self.tts.wait()
 
                                 # 백그라운드 작업이 끝날 때까지 여기서 잠시 대기 (대부분 바로 통과)
@@ -820,7 +820,7 @@ class PressToTalk:
                                 # 백그라운드에서 가져온 퀴즈를 self 변수로 옮김
                                 self.generated_quizzes = quiz_result_container
 
-                                self.tts.speak("마지막까지 살아남으시는 분께는 특별한 상품을 드릴게요!")
+                                self._speak_and_subtitle("마지막까지 살아남으시는 분께는 특별한 상품을 드릴게요!")
                                 self.tts.wait()
                                 is_main_game_started = True
 
@@ -830,7 +830,7 @@ class PressToTalk:
                                 if not is_crazy_mode_active:
                                     print(f"미친 난이도 퀴즈 출제! (본 게임 {main_game_round_counter + 1} 라운드)")
                                     if self.emotion_queue: self.emotion_queue.put("ANGRY")
-                                    self.tts.speak("후후후... 난이도 상승! 후후후... 이번엔 정말 어려울 거다...")
+                                    self._speak_and_subtitle("후후후... 난이도 상승! 후후후... 이번엔 정말 어려울 거다...")
                                     self.tts.wait()
                                     is_crazy_mode_active = True # 상태를 '크레이지 모드'로 변경
 
@@ -848,7 +848,7 @@ class PressToTalk:
                                     print(f"  - 사전 생성 퀴즈 사용: {quiz_data}")
 
                                 else:
-                                    print("  - Gemini API 실시간 새 퀴즈를 생성합니다.")
+                                    print(" - Gemini API 실시간 새 퀴즈를 생성합니다.")
                                     quiz_prompt = (
                                         "간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
                                         "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
@@ -862,16 +862,16 @@ class PressToTalk:
                                         )
                                         raw_json = _extract_text(quiz_response)
                                         quiz_data = json.loads(raw_json)
-                                        print(f"  - 생성된 퀴즈: {quiz_data}")
+                                        print(f" - 생성된 퀴즈: {quiz_data}")
                                     except Exception as e:
-                                        print(f"  - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
+                                        print(f" - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
                                         quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
 
                             main_game_round_counter += 1
 
                         if not is_predefined:
                             if not is_first_round:
-                                self.tts.speak("자, 다음 문제입니다!")
+                                self._speak_and_subtitle("자, 다음 문제입니다!")
                                 self.tts.wait()
                         
                             if random.random() < 0.5: # 50% 확률
@@ -883,15 +883,15 @@ class PressToTalk:
                                     "인간에겐 너무 어려웠나? 쉽게 갈까요?"
                                 ]
                                 # 위 리스트에서 무작위로 문장 하나를 선택하여 말합니다.
-                                self.tts.speak(random.choice(thinking_phrases))
+                                self._speak_and_subtitle(random.choice(thinking_phrases))
                                 self.tts.wait() # 추임새를 끝까지 말하도록 기다립니다.
                         
-                        self.tts.speak(quiz_data["question"])
+                        self._speak_and_subtitle(quiz_data["question"])
                         self.tts.wait()
-                        self.tts.speak("O는 오른쪽에, X는 왼쪽에 서주세요.")
+                        self._speak_and_subtitle("O는 오른쪽에, X는 왼쪽에 서주세요.")
                         self.tts.wait()
                         for i in range(5, 0, -1):
-                            self.tts.speak(str(i))
+                            self._speak_and_subtitle(str(i))
                             time.sleep(0.1)
                         self.tts.wait()
 
@@ -915,15 +915,15 @@ class PressToTalk:
                             
                             time.sleep(1)
                             correct_answer_text = f"정답은 {quiz_data['answer']} 였습니다!"
-                            self.tts.speak(correct_answer_text)
+                            self._speak_and_subtitle(correct_answer_text)
                             self.tts.wait()
                             
                             if is_predefined and quiz_data.get("explanation"):
-                                self.tts.speak(quiz_data["explanation"])
+                                self._speak_and_subtitle(quiz_data["explanation"])
                                 self.tts.wait()
 
                             # ✨ 3. 워커가 보내준 결과 메시지를 음성으로 출력
-                            self.tts.speak(message_to_speak)
+                            self._speak_and_subtitle(message_to_speak)
                             self.tts.wait()
                             
                             # ✨ 4. 'winner_count'를 이용한 새로운 게임 흐름 제어 로직
@@ -956,12 +956,12 @@ class PressToTalk:
 
                         except queue.Empty:
                             print("OX 퀴즈 시간 초과. 워커로부터 결과를 받지 못했습니다.")
-                            self.tts.speak("이런, 시간 안에 결과를 받지 못했어요. 게임을 종료합니다.")
+                            self._speak_and_subtitle("이런, 시간 안에 결과를 받지 못했어요. 게임을 종료합니다.")
                             is_game_over = True
                     
                     self.tts.wait()
 
-                    self.tts.speak("최후의 생존자와 가위바위보 게임을 진행할게요! 만약 여기서 이기시면 어마무시한 선물을 드리도록 하겠습니다! 하지만 패배하시면 벌칙을 받게 될거에요! 마음의 준비가 되시면 가위바위보라고 말씀해주세요!")
+                    self._speak_and_subtitle("최후의 생존자와 가위바위보 게임을 진행할게요! 만약 여기서 이기시면 어마무시한 선물을 드리도록 하겠습니다! 하지만 패배하시면 벌칙을 받게 될거에요! 마음의 준비가 되시면 가위바위보라고 말씀해주세요!")
                     
                     model_text = "OX 퀴즈 게임 종료."
 
@@ -977,7 +977,7 @@ class PressToTalk:
                 try:
                     self.raise_busy_signal() 
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                    self.tts.speak("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
+                    self._speak_and_subtitle("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
                     time.sleep(1)
                     final_game_result = ""
 
@@ -985,14 +985,14 @@ class PressToTalk:
                         if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
                         self.rps_command_q.put("START_GAME")
                         if self.emotion_queue: self.emotion_queue.put("THINKING")
-                        self.tts.speak("준비하시고...")
+                        self._speak_and_subtitle("준비하시고...")
                         self.tts.wait()
 
                         if callable(self.play_rps_motion_cb):
                             threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
 
-                        self.tts.speak("가위! 바위!")
-                        self.tts.speak("보!")
+                        self._speak_and_subtitle("가위! 바위!")
+                        self._speak_and_subtitle("보!")
                         self.tts.wait()
 
                         game_result = ""
@@ -1017,22 +1017,22 @@ class PressToTalk:
                         time.sleep(2) # 표정을 보여주기 위해 잠시 대기
 
                         if "비겼" in game_result:
-                            self.tts.speak(f"{game_result} 다시 한 번 할게요!")
+                            self._speak_and_subtitle(f"{game_result} 다시 한 번 할게요!")
                             self.tts.wait()                              
                             time.sleep(2)
                             continue
 
                         elif "아고! 실수로 눈을" in game_result:
-                            self.tts.speak("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요. 다시 한 번 할게요!")
+                            self._speak_and_subtitle("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요. 다시 한 번 할게요!")
                             self.tts.wait()                              
                             time.sleep(2)
                             continue
     
                         elif "이겼" in game_result:
                             if "제가 이겼네요"  in game_result:
-                                self.tts.speak(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요")
+                                self._speak_and_subtitle(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요")
                             else:
-                                self.tts.speak(f"{game_result} 까비! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
+                                self._speak_and_subtitle(f"{game_result} 까비! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
                             
                             self.tts.wait()
 
@@ -1044,7 +1044,7 @@ class PressToTalk:
                             break
 
                         else:
-                            self.tts.speak("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
+                            self._speak_and_subtitle("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
                             break
                 finally:
                     if not starts_dance:
@@ -1075,7 +1075,7 @@ class PressToTalk:
                 "여러분! 시험 공부 끝까지 포기하지 말고 힘내셔서 좋은 성과 있으시길 바라요. 그럼 다음에 또 돌아올게요! "
                 "지금까지 저는 여러분의 공감 서비스 로봇, 모티! 모티였습니다!"
             )
-            self.tts.speak(farewell_text)
+            self._speak_and_subtitle(farewell_text)
             self.tts.wait()
             print("작별 인사 완료. 1초 후 프로그램을 종료합니다.")
             time.sleep(1)
@@ -1154,7 +1154,7 @@ class PressToTalk:
                 if signal == "hotword_detected" and not self.stop_event.is_set():
                     print("💡 핫워드 감지! 대화 세션을 시작합니다.")
                     if self.emotion_queue: self.emotion_queue.put("WAKE")
-                    self.tts.speak("네, 말씀하세요.")
+                    self._speak_and_subtitle("네, 말씀하세요.")
                     
                     self.last_activity_time = time.time()
                     self.current_listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)

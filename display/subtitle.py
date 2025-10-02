@@ -1,3 +1,23 @@
+# ============================================================
+#Licensed to the Apache Software Foundation (ASF) under one
+#or more contributor license agreements.  See the NOTICE file
+#distributed with this work for additional information
+#regarding copyright ownership.  The ASF licenses this file
+#to you under the Apache License, Version 2.0 (the
+#"License"); you may not use this file except in compliance
+#with the License.  You may obtain a copy of the License at
+
+#    http://www.apache.org/licenses/LICENSE-2.0
+
+#Unless required by applicable law or agreed to in writing, software
+#distributed under the License is distributed on an "AS IS" BASIS,
+#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#See the License for the specific language governing permissions and
+#limitations under the License.
+# ============================================================
+
+# subtitle.py
+
 import tkinter as tk
 from queue import Empty
 import multiprocessing
@@ -8,67 +28,65 @@ def subtitle_window_process(subtitle_q: multiprocessing.Queue):
         root = tk.Tk()
         root.title("Moti Subtitle")
 
-        # 화면 크기를 얻어와 창 위치를 하단 중앙으로 설정
+        # ... (창 크기 및 위치 설정 코드는 그대로) ...
         screen_width = root.winfo_screenwidth()
         screen_height = root.winfo_screenheight()
-        window_width = 800
-        window_height = 100
+        window_width = 1100
+        window_height = 500
         x_pos = (screen_width // 2) - (window_width // 2)
-        y_pos = screen_height - window_height - 50 # 화면 하단에서 50px 위
+        y_pos = screen_height - window_height - 50
         root.geometry(f"{window_width}x{window_height}+{x_pos}+{y_pos}")
-
-        # 창 테두리 없애기, 항상 위에 있도록 설정
+        
         root.configure(bg="black")
         root.wm_attributes("-topmost", 1)
-        # 🔻🔻🔻 [수정된 부분 1] "자막" 제목 라벨 추가 🔻🔻🔻
-        # 제목을 표시할 작은 라벨을 만들어 창의 상단 왼쪽에 배치합니다.
+        
         title_label = tk.Label(
-            root,
-            text="",
-            font=("Malgun Gothic", 30), # 제목 폰트는 약간 작게 설정
-            fg="#AAAAAA", # 제목 글자색은 약간 회색으로 하여 본문과 구분
-            bg="black"
+            root, text="", font=("Malgun Gothic", 30),
+            fg="#AAAAAA", bg="black"
         )
-        # anchor='w'는 виджет을 서쪽(west), 즉 왼쪽에 정렬하라는 의미입니다.
         title_label.pack(anchor='w', padx=10, pady=(5, 0))
 
-        # 🔻🔻🔻 [수정된 부분 2] 기존 라벨 변수명 변경 및 패딩 조절 🔻🔻🔻
-        # 실제 자막 내용을 표시할 라벨 위젯 (기존 'label' -> 'subtitle_label')
         subtitle_label = tk.Label(
-            root, 
-            text="", 
-            font=("Malgun Gothic", 50, "bold"), # 폰트 설정
-            fg="white",      # 글자색
-            bg="black",      # 배경색
-            wraplength=window_width - 20 # 창 너비에 맞춰 자동 줄 바꿈
+            root, text="", font=("Malgun Gothic", 50, "bold"),
+            fg="white", bg="black", wraplength=window_width - 20
         )
-        # 제목 라벨 아래 공간을 모두 채우도록 설정하고, 위쪽 패딩을 줄여 제목에 가깝게 붙입니다.
         subtitle_label.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+
+        # [추가 1] 타이머 ID를 저장할 변수 생성
+        clear_timer_id = None
 
         def check_queue():
             """큐를 주기적으로 확인하여 라벨의 텍스트를 업데이트"""
+            nonlocal clear_timer_id # [추가 2] 중첩 함수 내에서 상위 변수를 수정하기 위해 nonlocal 선언
             try:
-                # 큐에서 메시지를 비동기적으로 가져옴
                 message = subtitle_q.get_nowait()
                 if message == "__QUIT__":
                     root.destroy()
                     return
                 
-                # 🔻🔻🔻 [수정된 부분 3] 업데이트할 라벨을 subtitle_label로 지정 🔻🔻🔻
+                # [수정 1] 새로운 메시지를 받으면, 기존에 설정된 '자막 지우기' 예약을 취소
+                if clear_timer_id:
+                    root.after_cancel(clear_timer_id)
+
                 subtitle_label.config(text=message)
                 
-                # 7초 후에 자막을 지우도록 예약
-                root.after(7000, lambda: subtitle_label.config(text=""))
+                # [수정 2] 자막 길이에 따라 표시 시간을 동적으로 계산
+                # 기본 2초 + 글자당 150ms (0.15초) 추가 (이 값은 조절 가능)
+                base_duration = 2000 
+                duration_per_char = 150
+                display_duration_ms = base_duration + (len(message) * duration_per_char)
+
+                # [수정 3] 계산된 시간 후에 자막을 지우도록 예약하고, 새로운 타이머 ID를 저장
+                clear_timer_id = root.after(display_duration_ms, lambda: subtitle_label.config(text=""))
 
             except Empty:
-                pass # 큐가 비어있으면 아무것도 하지 않음
+                pass 
             
-            # 100ms마다 이 함수를 다시 실행
             root.after(100, check_queue)
 
         print("💬 자막 창 프로세스 시작됨.")
-        check_queue() # 큐 확인 루프 시작
-        root.mainloop() # Tkinter 이벤트 루프 시작
+        check_queue() 
+        root.mainloop() 
 
     except Exception as e:
         print(f"❌ 자막 창 프로세스 오류: {e}")
