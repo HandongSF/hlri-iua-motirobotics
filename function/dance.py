@@ -143,6 +143,13 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, home_tilt)
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
         
+        print("🤖 팔 모터에 부드러운 가속도 설정...")
+        with lock:
+            # 0은 가속도 없음(기본값), 값이 클수록 느리게 가속됩니다. 20~50 사이 값으로 시작해보세요.
+            accel_value = 30
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+        
         # 음악 준비
         pygame.mixer.music.load(MUSIC_FILE)
 
@@ -225,6 +232,13 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
             io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_ACTION_POS)
             io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_ACTION_POS)
         time.sleep(0.5) # <<< 시간 1.0 -> 0.5
+        
+        print("  - (부담 완화) 양손 잠시 휴식 (토크 OFF)")
+        with lock:
+            # 12번 모터의 토크를 꺼서 힘을 빼줍니다.
+            io.write1(pkt, port, C.LEFT_HAND_ID, C.ADDR_TORQUE_ENABLE, 0)
+            # 8번 오른손 모터의 토크도 함께 꺼줍니다.
+            io.write1(pkt, port, C.RIGHT_HAND_ID, C.ADDR_TORQUE_ENABLE, 0)
         
         print("✅ [안무 4단계] 완료!")
         time.sleep(0.25) # <<< 시간 0.5 -> 0.25
@@ -370,7 +384,7 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         print("🤖 [안무 8단계] 마무리 동작 시작!")
 
         # 1. 팔 교차 동작 (3회 반복)
-        arm_speed = 1000  # <<< 속도 2배 (500 -> 1000)
+        arm_speed = 600  # <<< 속도 2배 (500 -> 1000)
         arm_wait_time = 0.25 # <<< 시간 0.5 -> 0.25
         with lock:
             io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
@@ -426,13 +440,31 @@ def _new_dance_routine(port: PortHandler, pkt: PacketHandler, lock: threading.Lo
         time.sleep(arm_wait_time)
 
         print("✅ [안무 8단계] 완료!")
-        
+        print("☕ [숨 고르기] 다음 동작 전 1.5초 휴식...")
+        time.sleep(1.5)
         # 피날레: 3초간 1.2Hz의 빠르고 역동적인 리듬으로 어깨 춤
         _perform_shoulder_dance(pkt, port, lock, duration_sec=11.0, frequency_hz=1, title="피날레 어깨 춤")
         time.sleep(0.25) # 다음 동작을 위해 잠시 대기
+        
+        print("🤖 [마무리 준비] 양손 토크 ON 및 자세 복귀")
+        with lock:
+            # 12번 왼손 모터의 토크를 다시 켜고,
+            io.write1(pkt, port, C.LEFT_HAND_ID, C.ADDR_TORQUE_ENABLE, 1)
+            # 8번 오른손 모터의 토크도 다시 켭니다.
+            io.write1(pkt, port, C.RIGHT_HAND_ID, C.ADDR_TORQUE_ENABLE, 1)
+            
+            # 안전하게 준비 자세로 미리 이동시킵니다.
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_READY_POS)
+        time.sleep(0.5)
 
     finally:
         pygame.mixer.music.stop()
+        print("🤖 팔 모터 가속도 설정 초기화...")
+        with lock:
+            # 가속도 설정을 0으로 되돌려 원래의 빠른 반응 속도로 복구합니다.
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
         shared_state['mode'] = 'tracking'
         if emotion_queue:
             emotion_queue.put("NEUTRAL")
