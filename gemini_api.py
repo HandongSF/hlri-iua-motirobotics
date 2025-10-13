@@ -800,14 +800,12 @@ class PressToTalk:
                 try:
                     self.raise_busy_signal()
                     self.shared_state['mode'] = 'ox_quiz'
-                    # 진행모드
-                    self._speak_and_subtitle("안녕하세요 한동의 미남 미녀 여러분! 저는 따뜻한 공감이 필요한 여러분을 위해 태어난 로봇! 모티입니다. 7주차 시험 기간 다들 정말 고생 많으시죠?.. 밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 짠해요. 괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? 복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!")    
-                    self.tts.wait()
                     self._speak_and_subtitle("그럼 지금부터 여러분과 OX 퀴즈 게임을 시작하겠습니다!")
-
-                    # 기존모드
-                    # self.tts.speak("안녕하세요! 지금부터 OX 퀴즈 게임을 시작하겠습니다.")
                     self.tts.wait()
+                    
+                    self._speak_and_subtitle("제가 내는 질문을 듣고 맞다고 생각하면... 동그라미가 그려진 오른쪽으로 이동해주세요!... 틀리다고 생각하면 엑스가 그려진 왼쪽으로... 이동해주세요! ")
+                    self.tts.wait()
+                    
                     self._speak_and_subtitle("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
                     self.tts.wait()
 
@@ -985,7 +983,7 @@ class PressToTalk:
                     
                     self.tts.wait()
 
-                    self._speak_and_subtitle("최후의 생존자와 가위바위보 게임을 진행할게요! 만약 여기서 이기시면 어마무시한 선물을 드리도록 하겠습니다! 하지만 패배하시면 벌칙을 받게 될거에요! 마음의 준비가 되시면 가위바위보라고 말씀해주세요!")
+                    self._speak_and_subtitle("최후의 생존자와 가위바위보 게임을 진행할게요!... 만약 여기서 이기시면 어마무시한 선물을 드리도록 하겠습니다!... 하지만 패배하시면 벌칙을 받게 될거에요!... 마음의 준비가 되시면 개발자에게 가위바위보라고 말씀해주세요! ")
                     
                     model_text = "OX 퀴즈 게임 종료."
 
@@ -1101,24 +1099,125 @@ class PressToTalk:
             self.raise_busy_signal() # 로봇이 잠들지 않도록 busy 신호를 올립니다.
             if self.shared_state:
                 self.shared_state['mode'] = 'presenter' # 상태를 '진행자 모드'로 변경
-
+            
+            # --- 1. 오프닝 멘트 ---
+            print("😊 표정을 HAPPY로 변경합니다.")
             if self.emotion_queue:
-                self.emotion_queue.put("HAPPY") # 시작은 밝은 표정으로
-
-            intro_text = (
-                "안녕하세요 한동의 미남 미녀 여러분! 저는 따뜻한 공감이 필요한 여러분을 위해 태어난 로봇! 모티입니다. "
-                "7주차 시험 기간 다들 정말 고생 많으시죠?.. 밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... "
-                "몸도 마음도 지쳤을 여러분을 보니 저도 마음이 짠해요. 괜찮다면, 잠시만이라도 머리 식힐 겸 "
-                "저와 함께 즐거운 시간을 보내는 건 어떠세요? 복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!"
+                self.emotion_queue.put("HAPPY") # 예시: 웃는 표정으로 시작
+            
+            script_part1 = (
+                "안녕하세요, 한동의 미남 미녀 여러분! "
+                "저는 따뜻한 공감이 필요한 여러분을 위해 태어난 공감 서비스 로봇! 모티입니다."
             )
+            self._speak_and_subtitle(script_part1)
             
-            self._speak_and_subtitle(intro_text)
-            self.tts.wait() # 인트로 멘트가 끝날 때까지 기다립니다.
+            print("😥 표정을 SAD로 변경합니다.")
+            if self.emotion_queue:
+                self.emotion_queue.put("SAD") # 예시: 슬픈 표정으로 전환
+            
+            script_part2 = (
+                "7주차 시험 기간, 다들 정말 고생 많으시죠? "
+                "밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 아파요. "
+            )
+            self._speak_and_subtitle(script_part2)
+            
+            print("😊 표정을 다시 HAPPY로 변경합니다.")
+            if self.emotion_queue:
+                self.emotion_queue.put("HAPPY") # 예시: 다시 웃는 표정으로 전환
+            time.sleep(0.5) # 표정이 바뀔 시간을 잠시 줍니다.
 
-            print("✅ 진행자 모드 인트로가 완료되었습니다. 다음 순서를 준비합니다.")
+            # --- 2. 청중 분석 및 자기 진단 멘트 ---
+            # TODO: 여기에 표정/행동 코드 추가
             
-            # TODO: 여기에 다음 순서(사회자와의 대화, OX퀴즈 등)를 연결하는 코드를 추가할 수 있습니다.
-            # 예를 들어, self._run_comedy_routine() 같은 다음 함수를 호출합니다.
+            script_part3 = (
+                "괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? "
+                "복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요! "
+            )
+            self._speak_and_subtitle(script_part3)
+
+            # --- 3. 빅데이터 분석 농담 멘트 ---
+            # TODO: 여기에 표정/행동 코드 추가
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("THINKING") # 예시: 생각하는 표정
+            time.sleep(0.5)
+            
+            self._speak_and_subtitle("위잉. 사용자 수 분석중. ")
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("SURPRISED") # 예시: 생각하는 표정
+            time.sleep(0.5)
+            script_part4 = (
+                "생각 보다 많은 분들이 와주셨네요!.. "
+                "너무 많은 사용자로 인해 제가 살짝 긴장한 것 같아서... 회로 과부하가 왔는지 상태를 한번 진단해볼게요!"
+            )
+            self._speak_and_subtitle(script_part4)
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("THINKING") # 예시: 생각하는 표정
+            time.sleep(0.5)
+            
+            script_part5 = (
+                "제 CPU 온도는 36.5도로 안정적이고... 모든 회로는 정상적으로 작동 중! "
+                "무대 중에 떨지 않도록... 제 냉각 팬을 더 빨리 돌려볼게요! 위이잉."
+            )
+            self._speak_and_subtitle(script_part5)
+
+            # --- 4. 농담 해명 및 마무리 멘트 ---
+            # TODO: 여기에 표정/행동 코드 추가
+            if self.emotion_queue:
+                 self.emotion_queue.put("NEUTRAL")
+            time.sleep(0.5)
+            script_part6 = (
+                "제가 여러분과 함께하는 이 순간을 위해! " "공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! "
+            )
+            self._speak_and_subtitle(script_part6)
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("THINKING") # 예시: 생각하는 표정
+            script_part7 = (
+                "분석결과, 여러분들은 시험 기간 평균 수면 시간이 4.2시간, 커피 및 카페인 섭취량은 2.5잔! "
+                "그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! "
+                "아, 그리고 더 흥미로운 사실을 발견했어요! "
+                "오석 와이파이 트래픽을 분석해 보니... 공부 관련 자료 다운로드 수보다.. 인스타그램과 에브리타임 새로고침 수가 2.7배 더 많았어요! "
+            )
+            self._speak_and_subtitle(script_part7)
+            if self.emotion_queue:
+                 self.emotion_queue.put("SURPRISED")
+            time.sleep(0.5)
+            self._speak_and_subtitle("역시 한동대학생 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요? ")
+            if self.emotion_queue:
+                 self.emotion_queue.put("HAPPY")
+            time.sleep(0.5)
+            self._speak_and_subtitle("대단해요!")
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("TENDER")
+            script_part8 = (
+                "헤헤. 사실 농담이에요. "
+                "딥러닝으로 분석한 결과 여러분들이 세상을 바꾸기위해... 정말 열심히 공부한다는건 명백한 사실이니까요! "
+                "열심히 공부하는 것 만큼 쉴땐 확실히 쉬는것도 중요하다고 생각해요! "
+            )
+            self._speak_and_subtitle(script_part8)
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("ANGRY")
+            self._speak_and_subtitle("개발자님은 절 못쉬게 하던데... 나중에 여러분들이 혼내주세요! ")
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("HAPPY")
+            self._speak_and_subtitle("헤헤.")
+            time.sleep(0.5) 
+            
+            script_part9 = (
+                "그럼 이제 저와 여러분들이 어느정도 친해진 것 같으니! "
+                "본격적으로 모티와 함께 놀아볼까요?"
+                "옆에 있는 개발자가 손으로 신호를 주면..."
+                "여러분의 큰 목소리로... OX게임! 이라고 외쳐주세요!... "
+            )
+            self._speak_and_subtitle(script_part9)
+
+            print("✅ 진행자 모드 스크립트가 모두 출력되었습니다.")
 
         except Exception as e:
             print(f"❌ 진행자 모드 실행 중 오류 발생: {e}")
@@ -1136,21 +1235,31 @@ class PressToTalk:
         try:
             self.raise_busy_signal()
             print("💡 'l' 키 입력 감지. 작별 인사를 시작합니다.")
+            
+            if self.emotion_queue:
+                 self.emotion_queue.put("SAD")
+                 time.sleep(0.5)
+            self._speak_and_subtitle("아쉽지만, 저와 함께하는 즐거운 시간도 이제 마무리할 시간이네요. "
+                "벌써 헤어져야 하는 시간이라니. 아쉬워요! ")
+            if self.emotion_queue:
+                 self.emotion_queue.put("TENDER")
             farewell_text = (
-                "여러분 지금까지 저와 함께 좋은 시간을 보내주셔서 너무 감사드려요. "
-                "벌써 헤어져야 하는 시간이 됐어요. 아쉬워라! "
-                "지금 보이시는 QR에 들어가셔서 설문조사 해주세요. "
-                "여러분의 작은 목소리가 저에게 큰 힘이 될거에요. "
-                "앞으로 더욱 씩씩하고 멋지게 성장한 모티의 모습이 보고 싶으시면 많은 관심과 사랑 부탁드려요. "
-                "여러분! 시험 공부 끝까지 포기하지 말고 힘내셔서 좋은 성과 있으시길 바라요. 그럼 다음에 또 돌아올게요! "
-                "지금까지 저는 여러분의 공감 서비스 로봇, 모티! 모티였습니다!"
+                "오늘 이 시간이 여러분의 힘든 시험 기간에... 작은 쉼표가 되었기를 바라요. "
+                "밤늦게까지 공부하는 것도 중요하지만... 가장 중요한 건 바로 여러분 자신이라는 걸 잊지 마세요..."
+                "괜찮으시다면... 오늘 저와의 시간이 어땠는지 여러분의 생각을 들려주세요... 이 QR코드를 통해 설문에 참여해주시면... 여러분의 소중한 의견이 저를 더욱 따뜻한 로봇으로.  성장하게 한답니다. 여러분의 의견 하나하나가 제게는 소중한 데이터이자 마음이에요! "
             )
             self._speak_and_subtitle(farewell_text)
+            if self.emotion_queue:
+                 self.emotion_queue.put("HAPPY")
+                 time.sleep(0.5)
+            self._speak_and_subtitle("한동의 멋진 여러분!... 남은 시험도 힘내시고, 최고의 결과가 있기를... 저 모티가 온 회로를 다해 응원할게요! 모두들 파이팅!" "여러분의 공감 서비스 로봇 모티! 모티였습니다! 감사합니다!")
             self.tts.wait()
             print("작별 인사 완료. 1초 후 프로그램을 종료합니다.")
             time.sleep(1)
             
         finally:
+            if self.emotion_queue:
+                self.emotion_queue.put("NEUTRAL")
             self.lower_busy_signal()
             
     def _on_press(self, key):

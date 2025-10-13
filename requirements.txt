@@ -73,3 +73,6 @@ Pyaudion
 
 # ----- serial port 탐색 -----
 pyserial
+
+# ----- 자막 -----
+screeninfo
