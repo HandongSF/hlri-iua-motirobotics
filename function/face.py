@@ -15,6 +15,7 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 # ============================================================
+
 # function/face.py
 
 from __future__ import annotations
@@ -28,6 +29,12 @@ from dynamixel_sdk import PortHandler, PacketHandler
 from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+
+# [추가] screeninfo 라이브러리를 가져옵니다. 라이브러리가 없어도 오류가 나지 않도록 try-except로 감싸줍니다.
+try:
+    import screeninfo
+except ImportError:
+    screeninfo = None
 
 _IS_DARWIN = (platform.system() == "Darwin")
 
@@ -56,14 +63,13 @@ def _as_int(v, default=None):
 def _can_show_window_in_this_thread() -> bool:
     return not (_IS_DARWIN and threading.current_thread() is not threading.main_thread())
 
-# [수정] shared_state 파라미터를 다시 받도록 수정
 def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.Lock,
-                        stop_event: threading.Event, video_frame_q: queue.Queue,
-                        sleepy_event: threading.Event,
-                        shared_state: dict,
-                        camera_index: int = 1,
-                        draw_mesh: bool = True,
-                        print_debug: bool = True):
+                         stop_event: threading.Event, video_frame_q: queue.Queue,
+                         sleepy_event: threading.Event,
+                         shared_state: dict,
+                         camera_index: int = 1,
+                         draw_mesh: bool = True,
+                         print_debug: bool = True):
 
     cv2, mp = suppress.import_cv2_mp()
 
@@ -135,7 +141,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             h, w = frame.shape[:2]
             cx, cy = w // 2, h // 2
 
-            # mediapipe 처리를 위해 BGR -> RGB 변환
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             
             frame_timestamp_ms = int(time.perf_counter() * 1000)
@@ -167,34 +172,23 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         error_tilt = cy - ny
 
                         if abs(error_pan) > C.DEAD_ZONE or abs(error_tilt) > C.DEAD_ZONE:
-                            # 2. 오차 누적 (I Term)
                             integral_pan += error_pan
                             integral_tilt += error_tilt
-                            # I 값이 너무 커지는 것을 방지 (Integral Windup 방지)
                             integral_pan = io.clamp(integral_pan, -200, 200)
                             integral_tilt = io.clamp(integral_tilt, -200, 200)
-
-                            # 3. 오차의 변화량 계산 (D Term)
                             derivative_pan = error_pan - last_error_pan
                             derivative_tilt = error_tilt - last_error_tilt
-                            
-                            # 4. 최종 제어량 계산 = P + I + D
                             pan_delta = (error_pan * C.KP_PAN) + (integral_pan * C.KI_PAN) + (derivative_pan * C.KD_PAN)
                             tilt_delta = (error_tilt * C.KP_TILT) + (integral_tilt * C.KI_TILT) + (derivative_tilt * C.KD_TILT)
                         else:
                             pan_delta, tilt_delta = 0, 0
-                            # 목표에 도달하면 I값 초기화
                             integral_pan, integral_tilt = 0, 0
 
-                        # 5. 다음 프레임을 위해 현재 오차를 '이전 오차'로 저장
                         last_error_pan = error_pan
                         last_error_tilt = error_tilt
                         
-                        # 6. 최종 위치 업데이트
                         pan_pos  = int(io.clamp(pan_pos  + C.PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
-                        tilt_pos = int(io.clamp(tilt_pos + C.TILT_SIGN * tilt_delta, C.SERVO_MIN, C.TILT_POS_MAX)) # 👈 SERVO_MAX를 TILT_POS_MAX로 변경
-
-                        # --- ✅ PID 제어 로직 끝 ---
+                        tilt_pos = int(io.clamp(tilt_pos + C.TILT_SIGN * tilt_delta, C.SERVO_MIN, C.TILT_POS_MAX))
 
                         with lock:
                             io.write4(pkt, port, C.PAN_ID,  C.ADDR_GOAL_POSITION, pan_pos)
@@ -206,38 +200,29 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                 else:
                     cv2.putText(frame, "Mode: Tracking (Sleepy)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
             
-            # --- 수정된 부분 시작 ---
             elif current_mode == 'ox_quiz':
-
                 left_count, right_count = 0, 0
                 if res.face_landmarks:
                     for face_landmarks in res.face_landmarks:
-                        nose_landmark = face_landmarks[1] # 코 위치 기준
+                        nose_landmark = face_landmarks[1]
                         face_x_position = int(nose_landmark.x * w)
                         if face_x_position < cx:
                             left_count += 1
                         else:
                             right_count += 1
 
-                # 1. 화면 중앙에 흰색 세로선 그리기
                 cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 3)
-
-                # 2. 왼쪽 상단에 'X' 표시 (빨간색)
                 cv2.putText(frame, "X", (40, 80), cv2.FONT_HERSHEY_TRIPLEX, 3, (0, 0, 255), 7)
                 cv2.putText(frame, f": {left_count}", (160, 80), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 0, 255), 7)
-
-                # 3. 오른쪽 상단에 'O' 표시 (초록색)
                 cv2.putText(frame, "O", (w - 250, 80), cv2.FONT_HERSHEY_TRIPLEX, 3, (0, 255, 0), 7)
                 cv2.putText(frame, f": {right_count}", (w - 130, 80), cv2.FONT_HERSHEY_SIMPLEX, 3, (0, 255, 0), 7)
                 
-                # 4. 화면 하단에 총 인원 수 표시
                 total_faces = left_count + right_count
                 count_text = f"Total: {total_faces}"
                 text_size = cv2.getTextSize(count_text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
                 text_x = w - text_size[0] - 20
                 text_y = h - 30
                 cv2.putText(frame, count_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
-            # --- 수정된 부분 끝 ---
 
             if draw_mesh and res.face_landmarks:
                 for landmark_list in res.face_landmarks:
@@ -256,19 +241,60 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         except Exception: pass
         landmarker.close()
 
-# display_loop는 shared_state를 직접 제어하지 않으므로 수정할 필요 없음
 def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Auto-Track Face Center"):
     cv2, _ = suppress.import_cv2_mp()
+
     if not _can_show_window_in_this_thread():
         print("⚠️ display_loop_main_thread는 반드시 메인 스레드에서 호출해야 합니다.")
         return
     try:
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+        MONITOR_INDEX_FOR_TRIPLE_SETUP = 2
+
+        x_pos, y_pos = 0, 0
+
+        if screeninfo:
+            try:
+                monitors = screeninfo.get_monitors()
+                num_monitors = len(monitors)
+                
+                target_index = 0
+
+                if num_monitors >= 3:
+                    target_index = MONITOR_INDEX_FOR_TRIPLE_SETUP
+                    print(f"✅ 카메라: 모니터 {num_monitors}개 감지 -> #{target_index}에 배치 시도")
+                else:
+                    target_index = 0
+                    print(f"✅ 카메라: 모니터 {num_monitors}개 감지 -> 주 모니터(#{target_index})에 배치")
+
+                if num_monitors > target_index:
+                    target_monitor = monitors[target_index]
+                else:
+                    target_monitor = monitors[0]
+                    print(f"⚠️ 지정된 카메라 모니터 #{target_index}를 찾을 수 없음")
+                
+                camera_width = 1280
+                x_pos = target_monitor.x + (target_monitor.width - camera_width) // 2
+                y_pos = target_monitor.y
+
+            except Exception as e:
+                print(f"❌ 카메라 모니터 확인 오류: {e}")
+        else:
+            print("⚠️ 'screeninfo' 라이브러리가 없어 카메라를 주 모니터에 배치합니다.")
+
+        cv2.moveWindow(window_name, x_pos, y_pos)
+        
+        print(f"✅ 카메라 창을 좌표 ({x_pos}, {y_pos})에 배치합니다.")
+        
         while not stop_event.is_set():
             try:
                 frame = _DISPLAY_Q.get(timeout=0.05)
             except queue.Empty:
                 continue
+            
             cv2.imshow(window_name, frame)
+            
             key = cv2.waitKey(1) & 0xFF
             if key == 27: # ESC 키로 종료
                 stop_event.set(); break
