@@ -15,7 +15,6 @@
 #See the License for the specific language governing permissions and
 #limitations under the License.
 # ============================================================
-# gemini_api.py
 
 from __future__ import annotations
 
@@ -421,23 +420,49 @@ class PressToTalk:
         self.announcement_active = False
 
     def _speak_and_subtitle(self, text_data: str | dict):
-        """TTS 출력과 자막 전송을 동시에 처리하는 헬퍼 함수"""
+        """
+        TTS 출력과 자막을 문장 단위로 동기화하여 처리합니다.
+        - 긴 문자열은 문장(.!?)으로 분리하여 하나씩 순차적으로 말하고 자막을 표시합니다.
+        - '가위! 바위!'와 '보!' 같이 연속 호출되어도 음성 출력을 기다립니다.
+        - 속도/볼륨 조절을 위한 dict 입력은 기존처럼 바로 처리합니다.
+        """
+        import re
+
         if not text_data:
             return
 
-        # 입력값이 딕셔너리일 경우 'text' 키의 값을, 문자열일 경우 그대로 사용
-        text_to_display = ""
+        # 딕셔너리 형태의 입력(속도/볼륨 조절 등)은 분리하지 않고 바로 처리
         if isinstance(text_data, dict):
             text_to_display = text_data.get("text", "")
-        else:
-            text_to_display = str(text_data)
+            if self.subtitle_queue and text_to_display:
+                self.subtitle_queue.put(text_to_display)
+            self.tts.speak(text_data)
+            # 딕셔너리 입력의 경우, 대부분 짧은 효과음이므로 wait를 호출하지 않거나
+            # 필요 시 호출하는 측에서 tts.wait()를 직접 관리하도록 합니다.
+            return
 
-        # 자막 큐가 존재하고, 표시할 텍스트가 있으면 큐에 넣음
-        if self.subtitle_queue and text_to_display:
-            self.subtitle_queue.put(text_to_display)
+        # 문자열 형태의 입력은 문장 단위로 분리
+        text_to_process = str(text_data)
         
-        # TTS로 음성 출력
-        self.tts.speak(text_data)
+        # 문장 분리: 마침표(.), 느낌표(!), 물음표(?) 뒤에 공백이 오는 경우를 기준으로 분리
+        # re.split()을 사용하여 구분 기호를 문장에 포함시킵니다.
+        sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
+        # 필터링: 분리 후 생길 수 있는 빈 문자열 제거
+        sentences = [s.strip() for s in sentences if s.strip()]
+
+        # 문장이 하나도 없으면 함수 종료
+        if not sentences:
+            return
+
+        # 3. 분리된 문장을 하나씩 순차적으로 처리
+        for sentence in sentences:
+            # 자막 큐가 존재하면 현재 문장을 큐에 넣음
+            if self.subtitle_queue:
+                self.subtitle_queue.put(sentence)
+            
+            # TTS로 현재 문장 음성 출력
+            self.tts.speak(sentence)
+            self.tts.wait()
         
     def _announcement_worker(self):
         # 안내 방송을 60초마다 반복하는 스레드 워커 함수입니다
@@ -646,9 +671,8 @@ class PressToTalk:
                     except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
                 
                 if self.emotion_queue:
-                    chosen_emotion = random.choice(["EXCITED"])
-                    self.emotion_queue.put(chosen_emotion)
-                    print(f"💃 춤 시작! 표정을 {chosen_emotion}로 변경합니다.")
+                    if self.emotion_queue: self.emotion_queue.put("EXCITED")
+                    print(f"💃 춤 시작! 표정을 EXCITED로 변경합니다.")
 
                 model_text = "네! 모티가 춤을 춰볼게요"; speak_text = "네! 모티가 춤을 춰볼게요"
 
@@ -734,7 +758,7 @@ class PressToTalk:
                     return
                 
                 predefined_quizzes = [
-                    {"question": "제 이름은 모터입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
+                    {"question": "제 이름은 '모터'입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
                     {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
                     {"question": "모티는 나름 유명한 유튜버이다", "answer": "O", "explanation": "구독과 좋아요! 알림 설정까지 꾸욱 눌러주세요!"},
                 ]
@@ -974,6 +998,8 @@ class PressToTalk:
 
             elif intent == "game":
                 print("💡 의도: ROCK PAPER SCISSORS GAME")
+                starts_dance = False
+
                 try:
                     self.raise_busy_signal() 
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
@@ -1051,7 +1077,8 @@ class PressToTalk:
                         self.lower_busy_signal()
                 
                     model_text = f"게임 종료. 최종 결과: {final_game_result}"
-                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+                    if not starts_dance:
+                        if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
             
             print(f"[{ts}] [Gemini] {model_text}\n")
             if speak_text: 
@@ -1162,7 +1189,6 @@ class PressToTalk:
             
         except AttributeError:
         # pynput 라이브러리에서 space, esc 같은 특수 키를 처리할 때 발생할 수 있는 오류를 방지합니다.
-        # 기존 로직은 그대로 유지합니다.
             if key == keyboard.Key.space:
                 self.last_activity_time = time.time()
                 self._stop_recording_and_transcribe()
