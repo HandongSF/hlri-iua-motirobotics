@@ -1062,6 +1062,49 @@ class PressToTalk:
             
         except Exception as e: print(f"❌ 처리 실패: {e}\n")
 
+    def _run_presenter_intro(self):
+        """'z' 키로 발동되는 진행자 모드의 인트로 시퀀스를 실행합니다."""
+        
+        # 이미 다른 모드가 실행 중이면 중복 실행을 방지합니다.
+        if self.shared_state and self.shared_state.get('mode') != 'tracking':
+            print(f"⚠️  다른 모드({self.shared_state.get('mode')})가 이미 실행 중입니다.")
+            return
+
+        try:
+            self.raise_busy_signal() # 로봇이 잠들지 않도록 busy 신호를 올립니다.
+            if self.shared_state:
+                self.shared_state['mode'] = 'presenter' # 상태를 '진행자 모드'로 변경
+
+            if self.emotion_queue:
+                self.emotion_queue.put("HAPPY") # 시작은 밝은 표정으로
+
+            intro_text = (
+                "안녕하세요 한동의 미남 미녀 여러분! 저는 따뜻한 공감이 필요한 여러분을 위해 태어난 로봇! 모티입니다. "
+                "7주차 시험 기간 다들 정말 고생 많으시죠?.. 밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... "
+                "몸도 마음도 지쳤을 여러분을 보니 저도 마음이 짠해요. 괜찮다면, 잠시만이라도 머리 식힐 겸 "
+                "저와 함께 즐거운 시간을 보내는 건 어떠세요? 복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!"
+            )
+            
+            self._speak_and_subtitle(intro_text)
+            self.tts.wait() # 인트로 멘트가 끝날 때까지 기다립니다.
+
+            print("✅ 진행자 모드 인트로가 완료되었습니다. 다음 순서를 준비합니다.")
+            
+            # TODO: 여기에 다음 순서(사회자와의 대화, OX퀴즈 등)를 연결하는 코드를 추가할 수 있습니다.
+            # 예를 들어, self._run_comedy_routine() 같은 다음 함수를 호출합니다.
+
+        except Exception as e:
+            print(f"❌ 진행자 모드 실행 중 오류 발생: {e}")
+        finally:
+            # 우선 인트로만 구현하므로, 끝나면 원래 상태로 복귀시킵니다.
+            # 추후 전체 시나리오를 구현할 때는 이 부분을 맨 마지막으로 옮겨야 합니다.
+            if self.shared_state:
+                self.shared_state['mode'] = 'tracking' # 상태를 다시 '얼굴 추적 모드'로 변경
+            self.lower_busy_signal() # busy 신호를 내립니다.
+            if self.emotion_queue:
+                self.emotion_queue.put("NEUTRAL")
+
+
     def _speak_farewell(self):
         try:
             self.raise_busy_signal()
@@ -1102,7 +1145,12 @@ class PressToTalk:
             elif key == keyboard.KeyCode.from_char('l'):
                 print("💡 'l' 키 입력 감지. 작별 인사를 시작합니다.")
                 threading.Thread(target=self._speak_farewell, daemon=True).start()
-
+            
+            elif key == keyboard.KeyCode.from_char('z'):
+                print("👑 'z' 키 입력 감지. 진행자 모드 인트로를 시작합니다.")
+                # 별도 스레드에서 실행하여 키보드 리스너가 멈추는 것을 방지합니다.
+                threading.Thread(target=self._run_presenter_intro, daemon=True).start()
+            
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
                 self.stop_announcement_event.set() 
