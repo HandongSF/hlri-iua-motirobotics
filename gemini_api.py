@@ -1127,7 +1127,7 @@ class PressToTalk:
             
             script_part3 = (
                 "괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? "
-                "복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요!"
+                "복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요! "
             )
             self._speak_and_subtitle(script_part3)
 
@@ -1144,7 +1144,7 @@ class PressToTalk:
                  self.emotion_queue.put("SURPRISED") # 예시: 생각하는 표정
             time.sleep(0.5)
             script_part4 = (
-                "생각 보다 많은 분들이 와주셨네요!.."
+                "생각 보다 많은 분들이 와주셨네요!.. "
                 "너무 많은 사용자로 인해 제가 살짝 긴장한 것 같아서... 회로 과부하가 왔는지 상태를 한번 진단해볼게요!"
             )
             self._speak_and_subtitle(script_part4)
@@ -1154,7 +1154,7 @@ class PressToTalk:
             time.sleep(0.5)
             
             script_part5 = (
-                "제 CPU 온도는 36.5도로 안정적이고... 모든 회로는 정상적으로 작동 중!"
+                "제 CPU 온도는 36.5도로 안정적이고... 모든 회로는 정상적으로 작동 중! "
                 "무대 중에 떨지 않도록... 제 냉각 팬을 더 빨리 돌려볼게요! 위이잉."
             )
             self._speak_and_subtitle(script_part5)
@@ -1165,7 +1165,7 @@ class PressToTalk:
                  self.emotion_queue.put("NEUTRAL")
             time.sleep(0.5)
             script_part6 = (
-                "제가 여러분과 함께하는 이 순간을 위해!" "공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! "
+                "제가 여러분과 함께하는 이 순간을 위해! " "공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! "
             )
             self._speak_and_subtitle(script_part6)
             
@@ -1173,7 +1173,7 @@ class PressToTalk:
                  self.emotion_queue.put("THINKING") # 예시: 생각하는 표정
             script_part7 = (
                 "분석결과, 여러분들은 시험 기간 평균 수면 시간이 4.2시간, 커피 및 카페인 섭취량은 2.5잔! "
-                "그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요!"
+                "그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! "
                 "아, 그리고 더 흥미로운 사실을 발견했어요! "
                 "오석 와이파이 트래픽을 분석해 보니... 공부 관련 자료 다운로드 수보다.. 인스타그램과 에브리타임 새로고침 수가 2.7배 더 많았어요! "
             )
@@ -1181,7 +1181,7 @@ class PressToTalk:
             if self.emotion_queue:
                  self.emotion_queue.put("SURPRISED")
             time.sleep(0.5)
-            self._speak_and_subtitle("역시 한동대학생 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요?")
+            self._speak_and_subtitle("역시 한동대학생 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요? ")
             if self.emotion_queue:
                  self.emotion_queue.put("HAPPY")
             time.sleep(0.5)
@@ -1198,7 +1198,7 @@ class PressToTalk:
             
             if self.emotion_queue:
                  self.emotion_queue.put("ANGRY")
-            self._speak_and_subtitle("개발자님은 절 못쉬게 하던데... 나중에 여러분들이 혼내주세요!")
+            self._speak_and_subtitle("개발자님은 절 못쉬게 하던데... 나중에 여러분들이 혼내주세요! ")
             
             if self.emotion_queue:
                  self.emotion_queue.put("HAPPY")
@@ -1208,6 +1208,10 @@ class PressToTalk:
             script_part9 = (
                 "그럼 이제 저와 여러분들이 어느정도 친해진 것 같으니! "
                 "본격적으로 모티와 함께 놀아볼까요?"
+                "옆에 있는 개발자가 손으로 신호를 주면..."
+                "여러분의 큰 목소리로..."
+                "OX게임! "
+                "이라고 외쳐주세요!!!"
             )
             self._speak_and_subtitle(script_part9)
 
