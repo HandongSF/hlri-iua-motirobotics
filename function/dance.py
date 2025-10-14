@@ -509,3 +509,187 @@ def stop_dance(port: PortHandler, pkt: PacketHandler, lock, return_home: bool = 
 
 def start_new_dance(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int, emotion_queue):
     threading.Thread(target=_new_dance_routine, args=(port, pkt, lock, shared_state, home_pan, home_tilt, emotion_queue), daemon=True).start()
+    
+def play_greeting_motion(port: PortHandler, pkt: PacketHandler, lock):
+    """
+    (수정) 부드러운 가속도를 적용하여 인사하는 동작을 수행합니다.
+    """
+    print("🤖 [행동] 부드러운 인사 동작 시작...")
+    
+    # 가속도 값 설정 (값이 작을수록 더 부드럽고 느리게 가속/감속합니다. 0은 즉시 가속)
+    acceleration_value = 30 
+    
+    try:
+        # --- 동작 시작 전: 가속도 설정 ---
+        print(f"  - 부드러운 움직임을 위해 가속도 값을 {acceleration_value}(으)로 설정합니다.")
+        with lock:
+            # 팔과 손 모터에 가속도 값을 적용합니다.
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+
+        # 동작에 사용할 속도를 미리 정의
+        ARM_SPEED = 500
+        HAND_SPEED = 600
+        
+        # --- 기존 동작 순서는 동일하게 유지 ---
+        
+        # 1. 왼손을 바깥쪽으로 이동시킵니다.
+        print("  - 1. 왼손 바깥으로 이동")
+        with lock:
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_VELOCITY, HAND_SPEED)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_WAVE_OUT_POS) # 대기 시간 소폭 증가
+
+        # 2. 왼팔을 위로 듭니다.
+        print("  - 2. 왼팔 위로 들기")
+        with lock:
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_VELOCITY, ARM_SPEED)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_UP_POS)
+        time.sleep(1.2) # 대기 시간 소폭 증가
+
+        # 3. 왼손을 원위치와 바깥쪽으로 2번 반복하여 흔듭니다.
+        print("  - 3. 손 흔들기 (2회 반복)")
+        for i in range(2):
+            print(f"    - 손 흔들기 {i+1}회: 원위치로")
+            with lock:
+                io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+            time.sleep(0.5) # 대기 시간 소폭 증가
+            
+            print(f"    - 손 흔들기 {i+1}회: 바깥으로")
+            with lock:
+                io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_WAVE_OUT_POS)
+            time.sleep(0.5) # 대기 시간 소폭 증가
+
+        # 4. 왼팔을 원위치로 내립니다.
+        print("  - 4. 왼팔 내리기")
+        with lock:
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
+        # 5. 왼손을 원위치 시킵니다.
+        print("  - 5. 왼손 원위치")
+        with lock:
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+        time.sleep(0.7) # 대기 시간 소폭 증가
+
+        print("✅ [행동] 인사 동작 완료.")
+
+    except Exception as e:
+        print(f"❌ 인사 동작 중 오류 발생: {e}")
+    finally:
+        # --- 동작 종료 후: 가속도 초기화 (매우 중요!) ---
+        print("  - 가속도 설정을 기본값(0)으로 되돌립니다.")
+        with lock:
+            # 다른 동작에 영향을 주지 않도록 가속도 값을 0으로 반드시 되돌립니다.
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            
+def play_both_arms_motion(port: PortHandler, pkt: PacketHandler, lock):
+    """(수정) 양팔을 동시에 들었다 내리면서, 손을 펼쳤다 오므리는 동작"""
+    print("🤖 [행동] 양팔 펼치며 들기 동작 시작...")
+    
+    acceleration_value = 40  # 부드러운 움직임을 위한 가속도
+    arm_speed = 120          # 천천히 움직이는 팔 속도
+    hand_speed = 400         # 손 움직임 속도
+    
+    try:
+        # 1. 동작 시작 전, 팔과 손 모터 모두에 가속도와 속도 설정
+        with lock:
+            # 가속도 설정
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            
+            # 속도 설정
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_VELOCITY, hand_speed)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_VELOCITY, hand_speed)
+
+        # 2. 양팔을 위로 올리면서, 동시에 양손을 바깥으로 펼칩니다.
+        print("  - 양팔 올리며 손 펼치기...")
+        with lock:
+            # 팔 올리기
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_TOP_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_TOP_POS)
+            # 손 펼치기
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_WAVE_OUT_POS)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_WAVE_OUT_POS)
+        time.sleep(3.5) # 동작 완료 대기
+
+        # 3. 양팔을 준비 위치로 내리면서, 동시에 양손을 원위치로 오므립니다.
+        print("  - 양팔 내리며 손 오므리기...")
+        with lock:
+            # 팔 내리기
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_READY_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
+            # 손 오므리기
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_READY_POS)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+        time.sleep(2.5) # 동작 완료 대기
+        
+        print("✅ [행동] 양팔 펼치며 들기 동작 완료.")
+
+    finally:
+        # 4. 동작 종료 후, 사용된 모든 모터의 가속도 설정을 반드시 초기화합니다.
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+
+
+def play_right_arm_motion(port: PortHandler, pkt: PacketHandler, lock):
+    """오른팔만 부드럽게 들었다 내리는 동작"""
+    print("🤖 [행동] 오른팔 단독 동작 시작...")
+    
+    acceleration_value = 40
+    arm_speed = 120
+    
+    try:
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+
+        print("  - 오른팔 올리기...")
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_TOP_POS)
+        time.sleep(2.5)
+
+        print("  - 오른팔 내리기...")
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_READY_POS)
+        time.sleep(2.5)
+        
+        print("✅ [행동] 오른팔 단독 동작 완료.")
+
+    finally:
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+
+
+def play_left_arm_motion(port: PortHandler, pkt: PacketHandler, lock):
+    """왼팔만 부드럽게 들었다 내리는 동작"""
+    print("🤖 [행동] 왼팔 단독 동작 시작...")
+    
+    acceleration_value = 40
+    arm_speed = 120
+    
+    try:
+        with lock:
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, acceleration_value)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+
+        print("  - 왼팔 올리기...")
+        with lock:
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_TOP_POS)
+        time.sleep(2.5)
+
+        print("  - 왼팔 내리기...")
+        with lock:
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
+        time.sleep(2.5)
+
+        print("✅ [행동] 왼팔 단독 동작 완료.")
+        
+    finally:
+        with lock:
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)

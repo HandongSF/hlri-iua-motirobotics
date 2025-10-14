@@ -131,10 +131,10 @@ HEAD_PAN_ID = 2
 # ---- 새로운 안무용 모터 위치 값 (방향 수정 완료) ----
 
 # [준비 자세 - HOME 위치]
-RIGHT_ARM_READY_POS = 3644
-LEFT_ARM_READY_POS = 1452
-RIGHT_HAND_READY_POS = 1978
-LEFT_HAND_READY_POS = 2053
+RIGHT_ARM_READY_POS = 3685
+LEFT_ARM_READY_POS = 1402
+RIGHT_HAND_READY_POS = 1823
+LEFT_HAND_READY_POS = 1864
 SHOULDER_CENTER_POS = 2073
 
 # [안무 2단계] 왼팔 번쩍 들기
@@ -152,7 +152,7 @@ LEFT_HAND_ACTION_POS = 1500  # 안쪽으로
 
 # [안무 5, 6, 8단계] 팔 위/중간/아래 동작
 RIGHT_ARM_TOP_POS = 4050     # 👈 수정: 오른팔 위로 (값이 커져야 함)
-LEFT_ARM_TOP_POS = 800       # 👈 수정: 왼팔 위로 (값이 작아져야 함)
+LEFT_ARM_TOP_POS = 900       # 👈 수정: 왼팔 위로 (값이 작아져야 함)
 RIGHT_ARM_MIDDLE_POS = 3850  # 👈 수정: 오른팔 중간
 LEFT_ARM_MIDDLE_POS = 1100   # 👈 수정: 왼팔 중간
 RIGHT_ARM_DOWN_POS = 3644    # 아래 (준비 자세와 동일)
@@ -168,3 +168,7 @@ SPEED_DANCE = 300   # 춤 출때 2배 빠른 속도
 # 기존 TURN_RPM(25.0)의 2배인 50.0으로 설정
 DANCE_TURN_RPM = 50.0
 DANCE_TURN_SPEED_UNITS = rpm_to_unit(DANCE_TURN_RPM)
+
+# ---- 진행자 모드 인사 동작 위치 값 ----
+LEFT_HAND_WAVE_OUT_POS = 2350 # 왼손을 바깥으로 흔들 때의 위치
+RIGHT_HAND_WAVE_OUT_POS = 2275 # 오른손을 바깥으로 흔들 때의 위치

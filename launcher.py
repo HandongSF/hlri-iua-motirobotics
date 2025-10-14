@@ -85,13 +85,18 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, subtitle_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q,ox_result_q):
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, play_greeting_cb, play_both_arms_cb, play_right_arm_cb, play_left_arm_cb, play_wheel_wiggle_cb, emotion_queue, subtitle_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
             start_dance_cb=start_dance_cb,
             stop_dance_cb=stop_dance_cb,
             play_rps_motion_cb=play_rps_motion_cb,
+            play_greeting_cb=play_greeting_cb,
+            play_both_arms_cb=play_both_arms_cb,
+            play_right_arm_cb=play_right_arm_cb,
+            play_left_arm_cb=play_left_arm_cb,
+            play_wheel_wiggle_cb=play_wheel_wiggle_cb,
             emotion_queue=emotion_queue,
             subtitle_queue=subtitle_queue,
             hotword_queue=hotword_queue,
@@ -101,11 +106,13 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, emotion_queue, su
             sleepy_event=sleepy_event,
             shared_state=shared_state,
             ox_command_q=ox_command_q,
-            ox_result_q=ox_result_q 
+            ox_result_q=ox_result_q
         )
         app.run()
-    except Exception as e: print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
-    finally: print("■ PTT 스레드 종료")
+    except Exception as e:
+        print(f"❌ PTT 스레드에서 치명적 오류 발생: {e}")
+    finally:
+        print("■ PTT 스레드 종료")
 
 def main():
     print("▶ launcher: (통합 버전) FaceTrack + Wheels + PTT + Dance + Visual Face")
@@ -166,10 +173,17 @@ def main():
     start_dance = lambda: D.start_new_dance(port, pkt, dxl_lock, shared_state, home_pan, home_tilt, emotion_queue)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
     play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
+    play_greeting = lambda: D.play_greeting_motion(port, pkt, dxl_lock)
+    play_both_arms = lambda: D.play_both_arms_motion(port, pkt, dxl_lock)
+    play_right_arm = lambda: D.play_right_arm_motion(port, pkt, dxl_lock)
+    play_left_arm = lambda: D.play_left_arm_motion(port, pkt, dxl_lock)
+    play_wheel_wiggle = lambda: D.play_wheel_wiggle_motion(port, pkt, dxl_lock)
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q),
+        # ▼▼▼▼▼▼▼▼▼▼ [아래 args 전체를 교체] ▼▼▼▼▼▼▼▼▼▼
+        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q),
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(

@@ -334,20 +334,25 @@ class TypecastTTSWorker:
 
 class PressToTalk:
     def __init__(self,
-                 start_dance_cb: Optional[Callable[[], None]] = None,
-                 stop_dance_cb: Optional[Callable[[], None]] = None,
-                 play_rps_motion_cb: Optional[Callable[[], None]] = None,
-                 emotion_queue: Optional[queue.Queue] = None,
-                 subtitle_queue: Optional[multiprocessing.Queue] = None, 
-                 hotword_queue: Optional[queue.Queue] = None,
-                 stop_event: Optional[threading.Event] = None,
-                 rps_command_q: Optional[multiprocessing.Queue] = None,
-                 rps_result_q: Optional[multiprocessing.Queue] = None,
-                 sleepy_event: Optional[threading.Event] = None,
-                 shared_state: Optional[dict] = None,
-                 ox_command_q: Optional[multiprocessing.Queue] = None,
-                 ox_result_q: Optional[multiprocessing.Queue] = None,
-                 ): 
+             start_dance_cb: Optional[Callable[[], None]] = None,
+             stop_dance_cb: Optional[Callable[[], None]] = None,
+             play_rps_motion_cb: Optional[Callable[[], None]] = None,
+             play_greeting_cb: Optional[Callable[[], None]] = None,
+             play_both_arms_cb: Optional[Callable[[], None]] = None,
+             play_right_arm_cb: Optional[Callable[[], None]] = None,
+             play_left_arm_cb: Optional[Callable[[], None]] = None,
+             play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
+             emotion_queue: Optional[queue.Queue] = None,
+             subtitle_queue: Optional[multiprocessing.Queue] = None, 
+             hotword_queue: Optional[queue.Queue] = None,
+             stop_event: Optional[threading.Event] = None,
+             rps_command_q: Optional[multiprocessing.Queue] = None,
+             rps_result_q: Optional[multiprocessing.Queue] = None,
+             sleepy_event: Optional[threading.Event] = None,
+             shared_state: Optional[dict] = None,
+             ox_command_q: Optional[multiprocessing.Queue] = None,
+             ox_result_q: Optional[multiprocessing.Queue] = None
+             ): 
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -378,6 +383,11 @@ class PressToTalk:
         self.start_dance_cb = start_dance_cb
         self.stop_dance_cb  = stop_dance_cb
         self.play_rps_motion_cb = play_rps_motion_cb
+        self.play_greeting_cb = play_greeting_cb
+        self.play_both_arms_cb = play_both_arms_cb
+        self.play_right_arm_cb = play_right_arm_cb
+        self.play_left_arm_cb = play_left_arm_cb
+        self.play_wheel_wiggle_cb = play_wheel_wiggle_cb
         self.emotion_queue = emotion_queue
         self.subtitle_queue = subtitle_queue
         self.hotword_queue = hotword_queue
@@ -1101,39 +1111,64 @@ class PressToTalk:
                 self.shared_state['mode'] = 'presenter' # 상태를 '진행자 모드'로 변경
             
             # --- 1. 오프닝 멘트 ---
+            if callable(self.play_greeting_cb):
+                greeting_thread = threading.Thread(target=self.play_greeting_cb, daemon=True)
+                greeting_thread.start()
+            
             print("😊 표정을 HAPPY로 변경합니다.")
             if self.emotion_queue:
                 self.emotion_queue.put("HAPPY") # 예시: 웃는 표정으로 시작
             
             script_part1 = (
                 "안녕하세요, 한동의 미남 미녀 여러분! "
-                "저는 따뜻한 공감이 필요한 여러분을 위해 태어난 공감 서비스 로봇! 모티입니다."
             )
             self._speak_and_subtitle(script_part1)
             
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+            
+            self._speak_and_subtitle("저는 따뜻한 공감이 필요한 여러분을 위해 태어난 공감 서비스 로봇! 모티입니다.")
+            
+            
+            if callable(self.play_right_arm_cb):
+                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
+                
             print("😥 표정을 SAD로 변경합니다.")
             if self.emotion_queue:
                 self.emotion_queue.put("SAD") # 예시: 슬픈 표정으로 전환
             
             script_part2 = (
                 "7주차 시험 기간, 다들 정말 고생 많으시죠? "
-                "밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 아파요. "
             )
             self._speak_and_subtitle(script_part2)
             
+            if callable(self.play_left_arm_cb):
+                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
+            
+            if callable(self.play_left_arm_cb):
+                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
+            
+            self._speak_and_subtitle("밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 아파요. ")
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+                
             print("😊 표정을 다시 HAPPY로 변경합니다.")
             if self.emotion_queue:
                 self.emotion_queue.put("HAPPY") # 예시: 다시 웃는 표정으로 전환
             time.sleep(0.5) # 표정이 바뀔 시간을 잠시 줍니다.
-
-            # --- 2. 청중 분석 및 자기 진단 멘트 ---
-            # TODO: 여기에 표정/행동 코드 추가
-            
             script_part3 = (
                 "괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? "
-                "복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요! "
             )
             self._speak_and_subtitle(script_part3)
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+            
+            self._speak_and_subtitle("복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요! ")
 
             # --- 3. 빅데이터 분석 농담 멘트 ---
             # TODO: 여기에 표정/행동 코드 추가
@@ -1147,44 +1182,105 @@ class PressToTalk:
             if self.emotion_queue:
                  self.emotion_queue.put("SURPRISED") # 예시: 생각하는 표정
             time.sleep(0.5)
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+                
             script_part4 = (
                 "생각 보다 많은 분들이 와주셨네요!.. "
-                "너무 많은 사용자로 인해 제가 살짝 긴장한 것 같아서... 회로 과부하가 왔는지 상태를 한번 진단해볼게요!"
+                "너무 많은 사용자로 인해 제가 살짝 긴장한 것 같아서... "
             )
             self._speak_and_subtitle(script_part4)
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+                
+            self._speak_and_subtitle("회로 과부하가 왔는지 상태를 한번 진단해볼게요!")
             
             if self.emotion_queue:
                  self.emotion_queue.put("THINKING") # 예시: 생각하는 표정
             time.sleep(0.5)
             
+            if callable(self.play_right_arm_cb):
+                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
+            
             script_part5 = (
-                "제 CPU 온도는 36.5도로 안정적이고... 모든 회로는 정상적으로 작동 중! "
-                "무대 중에 떨지 않도록... 제 냉각 팬을 더 빨리 돌려볼게요! 위이잉."
+                "제 CPU 온도는 36.5도로 안정적이고... "
             )
             self._speak_and_subtitle(script_part5)
+            
+            if callable(self.play_left_arm_cb):
+                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
+
+            self._speak_and_subtitle("모든 회로는 정상적으로 작동 중!")
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+            
+            self._speak_and_subtitle("무대 중에 떨지 않도록... 제 냉각 팬을 더 빨리 돌려볼게요! 위이잉.")
 
             # --- 4. 농담 해명 및 마무리 멘트 ---
             # TODO: 여기에 표정/행동 코드 추가
             if self.emotion_queue:
                  self.emotion_queue.put("NEUTRAL")
             time.sleep(0.5)
+            
+            if callable(self.play_left_arm_cb):
+                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
+            
             script_part6 = (
-                "제가 여러분과 함께하는 이 순간을 위해! " "공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! "
+                "제가 여러분과 함께하는 이 순간을 위해! " 
             )
             self._speak_and_subtitle(script_part6)
             
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+                
+            self._speak_and_subtitle("공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! ")
+            
             if self.emotion_queue:
                  self.emotion_queue.put("THINKING") # 예시: 생각하는 표정
+                 
+            if callable(self.play_left_arm_cb):
+                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
+                
+            self._speak_and_subtitle("분석결과, 여러분들은 시험 기간 평균 수면 시간이 4.2시간,")     
+            
+            if callable(self.play_right_arm_cb):
+                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
+            
+            self._speak_and_subtitle(" 커피 및 카페인 섭취량은 2.5잔! ")
+            
+            if callable(self.play_left_arm_cb):
+                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
+            
+            self._speak_and_subtitle("그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! ")
+            
+            if callable(self.play_right_arm_cb):
+                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
+                
+            self._speak_and_subtitle("아, 그리고 더 흥미로운 사실을 발견했어요! ")
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+            
             script_part7 = (
-                "분석결과, 여러분들은 시험 기간 평균 수면 시간이 4.2시간, 커피 및 카페인 섭취량은 2.5잔! "
-                "그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! "
-                "아, 그리고 더 흥미로운 사실을 발견했어요! "
                 "오석 와이파이 트래픽을 분석해 보니... 공부 관련 자료 다운로드 수보다.. 인스타그램과 에브리타임 새로고침 수가 2.7배 더 많았어요! "
             )
             self._speak_and_subtitle(script_part7)
             if self.emotion_queue:
                  self.emotion_queue.put("SURPRISED")
             time.sleep(0.5)
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+                
             self._speak_and_subtitle("역시 한동대학생 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요? ")
             if self.emotion_queue:
                  self.emotion_queue.put("HAPPY")
@@ -1193,8 +1289,14 @@ class PressToTalk:
             
             if self.emotion_queue:
                  self.emotion_queue.put("TENDER")
+                 
+            self._speak_and_subtitle("헤헤. 사실 농담이에요. ")
+            
+            if callable(self.play_right_arm_cb):
+                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
+                
             script_part8 = (
-                "헤헤. 사실 농담이에요. "
+                
                 "딥러닝으로 분석한 결과 여러분들이 세상을 바꾸기위해... 정말 열심히 공부한다는건 명백한 사실이니까요! "
                 "열심히 공부하는 것 만큼 쉴땐 확실히 쉬는것도 중요하다고 생각해요! "
             )
@@ -1209,13 +1311,26 @@ class PressToTalk:
             self._speak_and_subtitle("헤헤.")
             time.sleep(0.5) 
             
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+            
             script_part9 = (
                 "그럼 이제 저와 여러분들이 어느정도 친해진 것 같으니! "
                 "본격적으로 모티와 함께 놀아볼까요?"
-                "옆에 있는 개발자가 손으로 신호를 주면..."
-                "여러분의 큰 목소리로... OX게임! 이라고 외쳐주세요!... "
             )
             self._speak_and_subtitle(script_part9)
+            
+            if callable(self.play_right_arm_cb):
+                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
+                
+            self._speak_and_subtitle("옆에 있는 개발자가 손으로 신호를 주면...")
+            
+            if callable(self.play_both_arms_cb):
+                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
+                motion_thread.start()
+                
+            self._speak_and_subtitle("여러분의 큰 목소리로... OX게임! 이라고 외쳐주세요!... ")
 
             print("✅ 진행자 모드 스크립트가 모두 출력되었습니다.")
 
