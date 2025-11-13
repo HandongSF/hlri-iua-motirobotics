@@ -67,6 +67,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                          stop_event: threading.Event, video_frame_q: queue.Queue,
                          sleepy_event: threading.Event,
                          shared_state: dict,
+                         mouth_event_queue: queue.Queue | None = None,
                          camera_index: int = 1,
                          draw_mesh: bool = True,
                          print_debug: bool = True):
@@ -84,7 +85,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             min_face_detection_confidence=0.5,
             min_face_presence_confidence=0.5,
             min_tracking_confidence=0.5,
-            output_face_blendshapes=False,
+            output_face_blendshapes=True,
             output_facial_transformation_matrixes=False
         )
         landmarker = vision.FaceLandmarker.create_from_options(options)
@@ -125,6 +126,18 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     last_error_tilt = 0
     integral_pan = 0
     integral_tilt = 0
+    debug_counter = 0
+
+    last_mouth_open_time = 0.0
+    is_speaking_state = False
+    MOUTH_OPEN_THRESHOLD = 0.08  
+    SPEAKING_TIMEOUT_SEC = 2.0 
+    
+    def get_blendshape_score(blendshape_list, category_name):
+        for category in blendshape_list:
+            if category.category_name == category_name:
+                return category.score
+        return 0.0
 
     try:
         while not stop_event.is_set():
@@ -146,6 +159,34 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             frame_timestamp_ms = int(time.perf_counter() * 1000)
             res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
             
+            if mouth_event_queue and res.face_blendshapes and res.face_blendshapes[0]:
+                bs = res.face_blendshapes[0]
+                
+                mouth_open_score = get_blendshape_score(bs, 'jawOpen')
+     
+                debug_counter += 1
+                if debug_counter % 5 == 0:
+                    print(f"👄 Mouth Score: {mouth_open_score:.4f} (Threshold: {MOUTH_OPEN_THRESHOLD})")
+                
+                is_mouth_currently_open = mouth_open_score > MOUTH_OPEN_THRESHOLD
+                current_time = time.time()
+
+                if is_mouth_currently_open:
+                    last_mouth_open_time = current_time
+                    if not is_speaking_state:
+                        print("👄 Mouth open detected, sending START_RECORDING")
+                        is_speaking_state = True
+                        try:
+                            mouth_event_queue.put_nowait("START_RECORDING")
+                        except Exception: pass
+                else:
+                    if is_speaking_state and (current_time - last_mouth_open_time > SPEAKING_TIMEOUT_SEC):
+                        print("👄 Mouth closed for 2s, sending STOP_RECORDING")
+                        is_speaking_state = False
+                        try:
+                            mouth_event_queue.put_nowait("STOP_RECORDING")
+                        except Exception: pass
+
             current_mode = shared_state.get('mode', 'tracking')
 
             if current_mode != last_mode:
@@ -296,7 +337,7 @@ def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Au
             cv2.imshow(window_name, frame)
             
             key = cv2.waitKey(1) & 0xFF
-            if key == 27: # ESC 키로 종료
+            if key == 27:
                 stop_event.set(); break
     finally:
         try: cv2.destroyAllWindows()

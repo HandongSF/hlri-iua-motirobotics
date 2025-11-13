@@ -74,7 +74,6 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
     except Exception as e: print(f"  - 휠 정지 중 오류: {e}")
     try:
         with dxl_lock:
-            # RPS_ARM_ID를 포함한 모든 모터 토크 OFF
             ids = (C.PAN_ID, C.TILT_ID, *C.EXTRA_POS_IDS, C.RPS_ARM_ID)
             for i in ids: IO.write1(pkt, port, i, C.ADDR_TORQUE_ENABLE, 0)
         print("  - 모든 모터 토크 OFF 완료")
@@ -85,7 +84,7 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, play_greeting_cb, play_both_arms_cb, play_right_arm_cb, play_left_arm_cb, play_wheel_wiggle_cb, emotion_queue, subtitle_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q):
+def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, play_greeting_cb, play_both_arms_cb, play_right_arm_cb, play_left_arm_cb, play_wheel_wiggle_cb, emotion_queue, subtitle_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -106,7 +105,8 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, play_greeting_cb,
             sleepy_event=sleepy_event,
             shared_state=shared_state,
             ox_command_q=ox_command_q,
-            ox_result_q=ox_result_q
+            ox_result_q=ox_result_q,
+            mouth_event_queue=mouth_event_queue
         )
         app.run()
     except Exception as e:
@@ -123,6 +123,7 @@ def main():
     stop_event = threading.Event()
     emotion_queue = queue.Queue()
     hotword_queue = queue.Queue()
+    mouth_event_queue = queue.Queue()
     rps_command_q = multiprocessing.Queue()
     rps_result_q = multiprocessing.Queue()
     ox_command_q = multiprocessing.Queue()
@@ -147,12 +148,10 @@ def main():
     signal.signal(signal.SIGINT, _handle_sigint)
 
     try:
-        # 1. 통합 초기화 함수를 호출합니다. (이 함수는 init.py에 있어야 합니다)
         I.initialize_robot(port, pkt, dxl_lock)
         
-        # 2. 춤이 끝난 후 돌아올 고개의 '가운데' 위치를 config.py에서 직접 가져옵니다.
-        home_pan = I.MOTOR_HOME_POSITIONS.get(C.PAN_ID, 2048) # ID 10번 모터의 홈 위치
-        home_tilt = I.MOTOR_HOME_POSITIONS.get(C.TILT_ID, 2048) # ID 9번 모터의 홈 위치
+        home_pan = I.MOTOR_HOME_POSITIONS.get(C.PAN_ID, 2048) 
+        home_tilt = I.MOTOR_HOME_POSITIONS.get(C.TILT_ID, 2048)
 
         print("▶ 초기화 완료: 모든 모터가 지정된 위치로 이동했습니다.")
     except Exception as e:
@@ -166,10 +165,9 @@ def main():
     t_face = threading.Thread(
         target=F.face_tracker_worker,
         args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event, shared_state),
-        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True),
+        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True, mouth_event_queue=mouth_event_queue),
         name="face", daemon=True)
 
-    # 3. 춤 시작 함수 호출 시 필요한 모든 정보(shared_state, home_pan, home_tilt)를 전달합니다.
     start_dance = lambda: D.start_new_dance(port, pkt, dxl_lock, shared_state, home_pan, home_tilt, emotion_queue)
     stop_dance  = lambda: D.stop_dance(port, pkt, dxl_lock, return_home=True)
     play_rps_motion = lambda: D.play_rps_motion(port, pkt, dxl_lock)
@@ -181,9 +179,7 @@ def main():
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        # ▼▼▼▼▼▼▼▼▼▼ [아래 args 전체를 교체] ▼▼▼▼▼▼▼▼▼▼
-        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q),
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue),
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(
@@ -206,7 +202,6 @@ def main():
         args=(port, pkt, dxl_lock, stop_event),
         name="wheels", daemon=True)
 
-    # ... (이하 스레드 시작 및 종료 코드는 동일합니다) ...
     t_face.start()
     print(f"▶ FaceTracker 시작 (camera_index={cam_index})")
     t_visual_face.start()
