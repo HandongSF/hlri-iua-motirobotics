@@ -211,7 +211,7 @@ class RobotFaceApp:
                     self.hotword_queue.put("hotword_detected")
                 self.change_emotion("WAKE")
         else:
-            if pygame.time.get_ticks() - self.emotion_timer_start_time >= 10000:
+            if pygame.time.get_ticks() - self.emotion_timer_start_time >= 30000:
                 self.change_emotion("NEUTRAL")
 
         dx, dy = self.target_offset[0] - self.common_data['offset'][0], self.target_offset[1] - self.common_data['offset'][1]

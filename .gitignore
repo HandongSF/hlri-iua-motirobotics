@@ -48,3 +48,6 @@ logs/*
 .env.local
 !.env.example
 #커밋
+
+# --- 사용자 기억 ---
+user_profiles.json
