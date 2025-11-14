@@ -368,7 +368,8 @@ class PressToTalk:
              shared_state: Optional[dict] = None,
              ox_command_q: Optional[multiprocessing.Queue] = None,
              ox_result_q: Optional[multiprocessing.Queue] = None,
-             mouth_event_queue: Optional[queue.Queue] = None
+             mouth_event_queue: Optional[queue.Queue] = None,
+             perform_head_nod_cb: Optional[Callable[[int], None]] = None
              ): 
         
         api_key = os.environ.get("GOOGLE_API_KEY")
@@ -431,6 +432,11 @@ class PressToTalk:
         self.busy_signals = 0
         self.background_keep_alive_thread = None
         self.stop_background_keep_alive = threading.Event()
+        
+        self.perform_head_nod_cb = perform_head_nod_cb
+        self.nodding_thread = None
+        self.stop_nodding_event = threading.Event()
+        self.mouth_event_queue = mouth_event_queue
 
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
@@ -575,6 +581,37 @@ class PressToTalk:
 
         except Exception as e:
             print(f"❌ 프로필 요약 업데이트 실패: {e}")
+
+    def _listening_nod_worker(self):
+        """사용자가 말하는 동안 랜덤하게 고개를 끄덕이는 백그라운드 스레드"""
+        print("👂 경청 모드: 랜덤 끄덕임 스레드 시작...")
+        
+        # 스레드가 시작하고 바로 끄덕이지 않도록 초반에 랜덤 대기 (0.5초 ~ 1.5초)
+        start_wait = random.uniform(0.5, 1.5)
+        # wait() 함수는 1) 대기하거나 2) stop_nodding_event 신호를 받으면 즉시 True를 반환합니다.
+        interrupted = self.stop_nodding_event.wait(timeout=start_wait)
+        if interrupted: # 대기 중에 중지 신호가 오면 바로 종료
+            print("👂 경청 모드: 시작 전 중지됨.")
+            return
+
+        while not self.stop_nodding_event.is_set():
+            # 끄덕임 동작 수행 (1회)
+            if callable(self.perform_head_nod_cb):
+                try:
+                    # launcher를 통해 연결된 dance.py의 perform_head_nod(repetitions=1) 호출
+                    self.perform_head_nod_cb(repetitions=1) 
+                except Exception as e:
+                    print(f"⚠️ 경청 끄덕임 중 오류: {e}")
+            
+            # 다음 끄덕임까지 랜덤 대기 (1.5초 ~ 4.0초)
+            wait_time = random.uniform(1.5, 4.0)
+            
+            interrupted = self.stop_nodding_event.wait(timeout=wait_time)
+            
+            if interrupted:
+                break # 녹음이 중지되었으므로 루프 탈출
+        
+        print("👂 경청 모드: 랜덤 끄덕임 스레드 종료.")
 
     def _mouth_listener_worker(self):
         """A dedicated thread to listen for mouth events."""
@@ -756,6 +793,11 @@ class PressToTalk:
         self.state.stream.start()
         self.state.recording = True
         print("🎙️  녹음 시작 (스페이스바 유지 중)...")
+        
+        if callable(self.perform_head_nod_cb) and (self.nodding_thread is None or not self.nodding_thread.is_alive()):
+            self.stop_nodding_event.clear()
+            self.nodding_thread = threading.Thread(target=self._listening_nod_worker, daemon=True)
+            self.nodding_thread.start()
 
     def _stop_recording_and_transcribe(self):
         if not self.state.recording: return
@@ -766,6 +808,9 @@ class PressToTalk:
         try:
             if self.state.stream: self.state.stream.stop(); self.state.stream.close()
         finally: self.state.stream = None
+        
+        self.stop_nodding_event.set()
+        
         chunks = []
         while not self.state.frames_q.empty(): chunks.append(self.state.frames_q.get())
         if not chunks: print("(녹음 데이터가 없습니다.)\n"); return
@@ -1565,6 +1610,7 @@ class PressToTalk:
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
                 self.stop_announcement_event.set() 
+                self.stop_nodding_event.set()
                 self.stop_event.set()
                 
                 if self.current_listener and self.current_listener.is_alive():

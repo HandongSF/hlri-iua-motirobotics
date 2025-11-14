@@ -97,6 +97,58 @@ def start_dance(port: PortHandler, pkt: PacketHandler, lock, amp: int | None = N
     )
     _dance_thread.start()
     
+def perform_head_nod(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, repetitions=2):
+    """
+    (신규) 고개를 부드럽게 끄덕이는 독립 실행 함수.
+    가속도 프로파일을 사용하며, C.HEAD_NOD_HOME_POS(4000)을 준수합니다.
+    """
+    print(f"🤖 고개 끄덕이기 {repetitions}회 시작...")
+    
+    # 1. 동작 값 정의
+    home_pos = C.HEAD_NOD_HOME_POS  # 4000 (들린 상태)
+    down_pos = C.HEAD_NOD_DOWN_POS  # 3800 (숙인 상태)
+    accel_value = 30                # 부드러운 가속 (0이 아닌 값)
+    velocity_value = 300            # 끄덕이는 속도 (조절 가능)
+    default_velocity = 100          # init.py의 기본 속도값
+    nod_wait_time = 0.3             # 숙이고 머무는 시간
+    nod_wait_time_up = 0.4          # 들고 머무는 시간
+    
+    # 2. 모터 설정 (가속도/속도) - try/finally로 안전하게
+    try:
+        with lock:
+            print("  - 끄덕임용 가속도/속도 설정...")
+            io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_PROFILE_VELOCITY, velocity_value)
+
+        # 3. 끄덕임 동작 수행
+        for i in range(repetitions):
+            print(f"  - 끄덕 {i+1}회")
+            with lock:
+                # 고개 숙이기 (Down)
+                io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_GOAL_POSITION, down_pos)
+            time.sleep(nod_wait_time)
+            
+            with lock:
+                # 고개 들기 (Home)
+                io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_GOAL_POSITION, home_pos)
+            time.sleep(nod_wait_time_up)
+            
+            # C.HEAD_NOD_MAX_POS (4030) 제약 조건은 
+            # home_pos(4000)보다 크므로, 가속도 프로파일이 
+            # 4000을 살짝 넘더라도 4030 안에서 안전합니다.
+
+    finally:
+        # 4. 모터 설정 초기화 (매우 중요!)
+        with lock:
+            print("  - 끄덕임 설정 초기화 (가속도 0, 속도 100)...")
+            io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_PROFILE_VELOCITY, default_velocity) 
+            
+            # 마지막으로 홈 포지션으로 한 번 더 복귀 (안전을 위해)
+            io.write4(pkt, port, C.HEAD_NOD_ID, C.ADDR_GOAL_POSITION, home_pos)
+        
+    print("✅ 고개 끄덕이기 완료!")
+        
 def _perform_shoulder_dance(pkt, port, lock, duration_sec, frequency_hz, title):
     """(수정) 사인파를 이용해 지정된 리듬으로 어깨를 흔드는 헬퍼 함수"""
     print(f"🎶 {title} 시작! ({duration_sec}초, {frequency_hz}Hz)")

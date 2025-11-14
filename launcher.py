@@ -176,10 +176,11 @@ def main():
     play_right_arm = lambda: D.play_right_arm_motion(port, pkt, dxl_lock)
     play_left_arm = lambda: D.play_left_arm_motion(port, pkt, dxl_lock)
     play_wheel_wiggle = lambda: D.play_wheel_wiggle_motion(port, pkt, dxl_lock)
+    perform_head_nod = lambda reps=2: D.perform_head_nod(port, pkt, dxl_lock, repetitions=reps)    
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue),
+        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue, perform_head_nod),
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(
