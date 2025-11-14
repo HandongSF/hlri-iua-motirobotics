@@ -84,7 +84,14 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
             print("■ 종료: 포트 닫힘")
         except Exception as e: print(f"  - 포트 닫기 중 오류: {e}")
 
-def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, play_greeting_cb, play_both_arms_cb, play_right_arm_cb, play_left_arm_cb, play_wheel_wiggle_cb, emotion_queue, subtitle_queue, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue):
+def run_ptt(
+    start_dance_cb, stop_dance_cb, play_rps_motion_cb,
+    play_greeting_cb, play_both_arms_cb, play_right_arm_cb, play_left_arm_cb, play_wheel_wiggle_cb,
+    emotion_queue, subtitle_queue, hotword_queue, stop_event,
+    rps_command_q, rps_result_q, sleepy_event, shared_state,
+    ox_command_q, ox_result_q, mouth_event_queue,
+    perform_head_nod_cb
+):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
         app = PressToTalk(
@@ -106,7 +113,8 @@ def run_ptt(start_dance_cb, stop_dance_cb, play_rps_motion_cb, play_greeting_cb,
             shared_state=shared_state,
             ox_command_q=ox_command_q,
             ox_result_q=ox_result_q,
-            mouth_event_queue=mouth_event_queue
+            mouth_event_queue=mouth_event_queue,
+            perform_head_nod_cb=perform_head_nod_cb 
         )
         app.run()
     except Exception as e:
@@ -176,10 +184,11 @@ def main():
     play_right_arm = lambda: D.play_right_arm_motion(port, pkt, dxl_lock)
     play_left_arm = lambda: D.play_left_arm_motion(port, pkt, dxl_lock)
     play_wheel_wiggle = lambda: D.play_wheel_wiggle_motion(port, pkt, dxl_lock)
+    perform_head_nod = lambda reps=2: D.perform_head_nod(port, pkt, dxl_lock, repetitions=reps)    
     
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue),
+        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue, perform_head_nod),
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(

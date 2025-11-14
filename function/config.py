@@ -76,6 +76,7 @@ BAUDRATE         = int(os.getenv("DXL_BAUD", "57600"))
 PROTOCOL_VERSION = float(os.getenv("DXL_PROTO", "2.0"))
 
 # ---- 팬/틸트(Position) ----
+HEAD_NOD_ID = 1
 PAN_ID, TILT_ID = 2, 9
 SERVO_MIN, SERVO_MAX = 0, 4095
 TILT_POS_MAX = 2040 # 👈 9번 모터의 최대 위치 제한값을 여기에 추가합니다.
@@ -103,11 +104,17 @@ def rpm_to_unit(rpm: float) -> int:
 BASE_SPEED_UNITS = rpm_to_unit(BASE_RPM)
 TURN_SPEED_UNITS = rpm_to_unit(TURN_RPM)
 
+# 1번 모터의 기본 '준비' 자세 (고개 들린 상태)
+HEAD_NOD_HOME_POS = 4000
+# 1번 모터의 '숙인' 자세 위치
+HEAD_NOD_DOWN_POS = 3900
+# 1번 모터의 '최대 한계' 위치 (물리적 충돌 방지)
+HEAD_NOD_MAX_POS = 4030
+
 # ---- 댄스(2XL430) ----
 DANCE_ID = 5
 AUX_ID   = 6
 
-# ▼▼▼▼▼▼▼▼▼▼▼▼▼▼ 4. 수정된 부분 ▼▼▼▼▼▼▼▼▼▼▼▼▼▼
 # ---- 가위바위보 팔(Position) ----
 RPS_ARM_ID = 11  # 팔 모터의 ID를 11번으로 수정
 RPS_ARM_UP_POS = 1052 # 팔을 위로 올렸을 때의 위치 값 (예시)
@@ -115,7 +122,6 @@ RPS_ARM_DOWN_POS = 1352 # 시작 위치(118.83도)를 변환한 값
 
 # ---- 초기화할 포지션 모드 모터 목록 ----
 EXTRA_POS_IDS = (DANCE_ID, AUX_ID, RPS_ARM_ID)
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 DANCE_AMP = int(os.getenv("DANCE_AMP", "140"))
 DANCE_HZ  = float(os.getenv("DANCE_HZ",  "1.2"))

@@ -134,10 +134,20 @@ FAREWELL_TEXT = _get_env("FAREWELL_TEXT", "도움이 되었길 바라요. 언제
 ENABLE_GREETING = _get_env("ENABLE_GREETING", "1") not in ("0", "false", "False")
 
 def _extract_text(resp) -> str:
-    t = getattr(resp, "text", None)
-    if t and str(t).strip():
-        return str(t).strip()
+    """
+    Gemini 응답 객체에서 (thought) 과정을 제외하고,
+    사용자에게 보여줄 최종 텍스트만 추출합니다.
+    """
     try:
+        # 1. 가장 이상적인 경로: .text 속성에 바로 답변이 있는 경우
+        t = getattr(resp, "text", None)
+        if t and str(t).strip():
+            # (thought)가 포함되어 있는지 확인
+            clean_t = str(t).strip()
+            if not clean_t.startswith("(thought)"):
+                return clean_t
+
+        # 2. 표준 경로: .candidates 리스트에서 parts 순회
         pieces = []
         for c in getattr(resp, "candidates", []) or []:
             content = getattr(c, "content", None)
@@ -146,11 +156,31 @@ def _extract_text(resp) -> str:
                 pt = getattr(p, "text", None)
                 if pt and str(pt).strip():
                     pieces.append(str(pt).strip())
+        
         if pieces:
-            return "\n".join(pieces).strip()
-    except Exception: pass
-    try: return str(resp).strip()
-    except Exception: return ""
+            # 여러 조각이 있더라도 (thought)로 시작하는 것은 제외하고 합침
+            final_text = "\n".join(p for p in pieces if not p.startswith("(thought)"))
+            return final_text.strip()
+            
+        # 3. (thought)만 있고 최종 답변이 없는 경우 (예: 오류)
+        #    이 경우, 안전하게 빈 문자열을 반환
+        return ""
+
+    except Exception as e:
+        print(f"⚠️ _extract_text 오류: {e}")
+        try:
+            # 4. 최후의 수단 (기존 로직)
+            #    (thought)가 포함될 수 있지만, 아예 응답이 없는 것보다 나을 수 있음
+            fallback_text = str(resp).strip()
+            if fallback_text.startswith("(thought)"):
+                # 최후의 수단으로라도 (thought)는 제거 시도
+                lines = fallback_text.splitlines()
+                non_thought_lines = [line for line in lines if not line.strip().startswith("(thought)")]
+                if non_thought_lines:
+                    return "\n".join(non_thought_lines).strip()
+            return fallback_text # 최악의 경우 (thought)라도 반환
+        except Exception:
+            return "" # 최종 실패
 
 @dataclass
 class RecorderState:
@@ -350,26 +380,28 @@ class TypecastTTSWorker:
 
 class PressToTalk:
     def __init__(self,
-             start_dance_cb: Optional[Callable[[], None]] = None,
-             stop_dance_cb: Optional[Callable[[], None]] = None,
-             play_rps_motion_cb: Optional[Callable[[], None]] = None,
-             play_greeting_cb: Optional[Callable[[], None]] = None,
-             play_both_arms_cb: Optional[Callable[[], None]] = None,
-             play_right_arm_cb: Optional[Callable[[], None]] = None,
-             play_left_arm_cb: Optional[Callable[[], None]] = None,
-             play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
-             emotion_queue: Optional[queue.Queue] = None,
-             subtitle_queue: Optional[multiprocessing.Queue] = None, 
-             hotword_queue: Optional[queue.Queue] = None,
-             stop_event: Optional[threading.Event] = None,
-             rps_command_q: Optional[multiprocessing.Queue] = None,
-             rps_result_q: Optional[multiprocessing.Queue] = None,
-             sleepy_event: Optional[threading.Event] = None,
-             shared_state: Optional[dict] = None,
-             ox_command_q: Optional[multiprocessing.Queue] = None,
-             ox_result_q: Optional[multiprocessing.Queue] = None,
-             mouth_event_queue: Optional[queue.Queue] = None
-             ): 
+                 start_dance_cb: Optional[Callable[[], None]] = None,
+                 stop_dance_cb: Optional[Callable[[], None]] = None,
+                 play_rps_motion_cb: Optional[Callable[[], None]] = None,
+                 play_greeting_cb: Optional[Callable[[], None]] = None,
+                 play_both_arms_cb: Optional[Callable[[], None]] = None,
+                 play_right_arm_cb: Optional[Callable[[], None]] = None,
+                 play_left_arm_cb: Optional[Callable[[], None]] = None,
+                 play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
+                 emotion_queue: Optional[queue.Queue] = None,
+                 subtitle_queue: Optional[multiprocessing.Queue] = None, 
+                 hotword_queue: Optional[queue.Queue] = None,
+                 stop_event: Optional[threading.Event] = None,
+                 rps_command_q: Optional[multiprocessing.Queue] = None,
+                 rps_result_q: Optional[multiprocessing.Queue] = None,
+                 sleepy_event: Optional[threading.Event] = None,
+                 shared_state: Optional[dict] = None,
+                 ox_command_q: Optional[multiprocessing.Queue] = None,
+                 ox_result_q: Optional[multiprocessing.Queue] = None,
+                 mouth_event_queue: Optional[queue.Queue] = None,
+                 # ▼▼▼ [수정] 끄덕임 콜백 함수를 괄호 안으로 이동시킴 ▼▼▼
+                 perform_head_nod_cb: Optional[Callable[[int], None]] = None
+                 ): 
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -431,6 +463,10 @@ class PressToTalk:
         self.busy_signals = 0
         self.background_keep_alive_thread = None
         self.stop_background_keep_alive = threading.Event()
+
+        self.perform_head_nod_cb = perform_head_nod_cb
+        self.nodding_thread = None
+        self.stop_nodding_event = threading.Event()
 
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
@@ -576,6 +612,44 @@ class PressToTalk:
         except Exception as e:
             print(f"❌ 프로필 요약 업데이트 실패: {e}")
 
+    def _listening_nod_worker(self):
+        """사용자가 말하는 동안 랜덤하게 고개를 끄덕이는 백그라운드 스레드"""
+        print("👂 경청 모드: 랜덤 끄덕임 스레드 시작...")
+        
+        # 스레드가 시작하고 바로 끄덕이지 않도록 초반에 랜덤 대기 (0.5초 ~ 1.5초)
+        start_wait = random.uniform(0.5, 1.5)
+        # wait() 함수는 1) 대기하거나 2) stop_nodding_event 신호를 받으면 즉시 True를 반환합니다.
+        interrupted = self.stop_nodding_event.wait(timeout=start_wait)
+        if interrupted: # 대기 중에 중지 신호가 오면 바로 종료
+            print("👂 경청 모드: 시작 전 중지됨.")
+            return
+
+        while not self.stop_nodding_event.is_set():
+            # 끄덕임 횟수를 랜덤으로 결정합니다.
+            if random.random() < 0.3: # 20% 확률로
+                reps = 2 # 빠르게 두 번 끄덕이기
+                print("👂 (경청) 끄덕임 x2")
+            else: # 80% 확률로
+                reps = 1 # 한 번 끄덕이기
+                print("👂 (경청) 끄덕임 x1")
+
+            if callable(self.perform_head_nod_cb):
+                try:
+                    # 결정된 횟수(reps)만큼 끄덕임 스레드 시작
+                    threading.Thread(target=self.perform_head_nod_cb, args=(reps,), daemon=True).start()
+                except Exception as e:
+                    print(f"⚠️ 경청 끄덕임 중 오류: {e}")
+            
+            # 다음 끄덕임까지 랜덤 대기 (1.5초 ~ 4.0초)
+            wait_time = random.uniform(1.5, 4.0)
+            
+            interrupted = self.stop_nodding_event.wait(timeout=wait_time)
+            
+            if interrupted:
+                break # 녹음이 중지되었으므로 루프 탈출
+        
+        print("👂 경청 모드: 랜덤 끄덕임 스레드 종료.")
+
     def _mouth_listener_worker(self):
         """A dedicated thread to listen for mouth events."""
         print("▶ 🔊 Mouth-to-Talk listener thread started.")
@@ -609,27 +683,31 @@ class PressToTalk:
 
         if not text_data:
             return
-
-        if isinstance(text_data, dict):
-            text_to_display = text_data.get("text", "")
-            if self.subtitle_queue and text_to_display:
-                self.subtitle_queue.put(text_to_display)
-            self.tts.speak(text_data)
-            return
         
-        text_to_process = str(text_data)
-        sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
-        sentences = [s.strip() for s in sentences if s.strip()]
-
-        if not sentences:
-            return
-
-        for sentence in sentences:
-            if self.subtitle_queue:
-                self.subtitle_queue.put(sentence)
+        self.raise_busy_signal()
+        try:
+            if isinstance(text_data, dict):
+                text_to_display = text_data.get("text", "")
+                if self.subtitle_queue and text_to_display:
+                    self.subtitle_queue.put(text_to_display)
+                self.tts.speak(text_data)
+                return
             
-            self.tts.speak(sentence)
-            self.tts.wait()
+            text_to_process = str(text_data)
+            sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
+            sentences = [s.strip() for s in sentences if s.strip()]
+
+            if not sentences:
+                return
+
+            for sentence in sentences:
+                if self.subtitle_queue:
+                    self.subtitle_queue.put(sentence)
+                
+                self.tts.speak(sentence)
+                self.tts.wait()
+        finally:
+            self.lower_busy_signal()
         
     def _announcement_worker(self):
         announcement_text = "한동의 미남 미녀 여러분 안녕하세요. 잠시만 주목해주세요! 8시부터 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요. "
@@ -756,9 +834,16 @@ class PressToTalk:
         self.state.stream.start()
         self.state.recording = True
         print("🎙️  녹음 시작 (스페이스바 유지 중)...")
+        
+        if callable(self.perform_head_nod_cb) and (self.nodding_thread is None or not self.nodding_thread.is_alive()):
+            self.stop_nodding_event.clear()
+            self.nodding_thread = threading.Thread(target=self._listening_nod_worker, daemon=True)
+            self.nodding_thread.start()
 
     def _stop_recording_and_transcribe(self):
         if not self.state.recording: return
+        if self.emotion_queue:
+            self.emotion_queue.put("NEUTRAL")
         self.last_activity_time = time.time()
         print("✅ User stopped speaking. Activity timer reset.")
         print("⏹️  녹음 종료, 전사 중...")
@@ -766,6 +851,9 @@ class PressToTalk:
         try:
             if self.state.stream: self.state.stream.stop(); self.state.stream.close()
         finally: self.state.stream = None
+        
+        self.stop_nodding_event.set()
+        
         chunks = []
         while not self.state.frames_q.empty(): chunks.append(self.state.frames_q.get())
         if not chunks: print("(녹음 데이터가 없습니다.)\n"); return
@@ -1565,6 +1653,7 @@ class PressToTalk:
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
                 self.stop_announcement_event.set() 
+                self.stop_nodding_event.set()
                 self.stop_event.set()
                 
                 if self.current_listener and self.current_listener.is_alive():
