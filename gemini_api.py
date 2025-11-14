@@ -350,27 +350,28 @@ class TypecastTTSWorker:
 
 class PressToTalk:
     def __init__(self,
-             start_dance_cb: Optional[Callable[[], None]] = None,
-             stop_dance_cb: Optional[Callable[[], None]] = None,
-             play_rps_motion_cb: Optional[Callable[[], None]] = None,
-             play_greeting_cb: Optional[Callable[[], None]] = None,
-             play_both_arms_cb: Optional[Callable[[], None]] = None,
-             play_right_arm_cb: Optional[Callable[[], None]] = None,
-             play_left_arm_cb: Optional[Callable[[], None]] = None,
-             play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
-             emotion_queue: Optional[queue.Queue] = None,
-             subtitle_queue: Optional[multiprocessing.Queue] = None, 
-             hotword_queue: Optional[queue.Queue] = None,
-             stop_event: Optional[threading.Event] = None,
-             rps_command_q: Optional[multiprocessing.Queue] = None,
-             rps_result_q: Optional[multiprocessing.Queue] = None,
-             sleepy_event: Optional[threading.Event] = None,
-             shared_state: Optional[dict] = None,
-             ox_command_q: Optional[multiprocessing.Queue] = None,
-             ox_result_q: Optional[multiprocessing.Queue] = None,
-             mouth_event_queue: Optional[queue.Queue] = None,
-             perform_head_nod_cb: Optional[Callable[[int], None]] = None
-             ): 
+                 start_dance_cb: Optional[Callable[[], None]] = None,
+                 stop_dance_cb: Optional[Callable[[], None]] = None,
+                 play_rps_motion_cb: Optional[Callable[[], None]] = None,
+                 play_greeting_cb: Optional[Callable[[], None]] = None,
+                 play_both_arms_cb: Optional[Callable[[], None]] = None,
+                 play_right_arm_cb: Optional[Callable[[], None]] = None,
+                 play_left_arm_cb: Optional[Callable[[], None]] = None,
+                 play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
+                 emotion_queue: Optional[queue.Queue] = None,
+                 subtitle_queue: Optional[multiprocessing.Queue] = None, 
+                 hotword_queue: Optional[queue.Queue] = None,
+                 stop_event: Optional[threading.Event] = None,
+                 rps_command_q: Optional[multiprocessing.Queue] = None,
+                 rps_result_q: Optional[multiprocessing.Queue] = None,
+                 sleepy_event: Optional[threading.Event] = None,
+                 shared_state: Optional[dict] = None,
+                 ox_command_q: Optional[multiprocessing.Queue] = None,
+                 ox_result_q: Optional[multiprocessing.Queue] = None,
+                 mouth_event_queue: Optional[queue.Queue] = None,
+                 # ▼▼▼ [수정] 끄덕임 콜백 함수를 괄호 안으로 이동시킴 ▼▼▼
+                 perform_head_nod_cb: Optional[Callable[[int], None]] = None
+                 ): 
         
         api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key or not api_key.strip():
@@ -432,11 +433,10 @@ class PressToTalk:
         self.busy_signals = 0
         self.background_keep_alive_thread = None
         self.stop_background_keep_alive = threading.Event()
-        
+
         self.perform_head_nod_cb = perform_head_nod_cb
         self.nodding_thread = None
         self.stop_nodding_event = threading.Event()
-        self.mouth_event_queue = mouth_event_queue
 
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
@@ -599,7 +599,7 @@ class PressToTalk:
             if callable(self.perform_head_nod_cb):
                 try:
                     # launcher를 통해 연결된 dance.py의 perform_head_nod(repetitions=1) 호출
-                    self.perform_head_nod_cb(repetitions=1) 
+                    threading.Thread(target=self.perform_head_nod_cb, args=(1,), daemon=True).start()
                 except Exception as e:
                     print(f"⚠️ 경청 끄덕임 중 오류: {e}")
             

@@ -107,7 +107,7 @@ TURN_SPEED_UNITS = rpm_to_unit(TURN_RPM)
 # 1번 모터의 기본 '준비' 자세 (고개 들린 상태)
 HEAD_NOD_HOME_POS = 4000
 # 1번 모터의 '숙인' 자세 위치
-HEAD_NOD_DOWN_POS = 3800
+HEAD_NOD_DOWN_POS = 3900
 # 1번 모터의 '최대 한계' 위치 (물리적 충돌 방지)
 HEAD_NOD_MAX_POS = 4030
 
