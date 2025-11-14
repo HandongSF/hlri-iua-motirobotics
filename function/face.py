@@ -109,6 +109,18 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     if print_debug:
         print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
+    print(f"🤖 추적 모터(Pan/Tilt)에 가속도 및 속도({C.PROFILE_VELOCITY}) 설정...")
+    with lock:
+        # 0이 아닌 값을 설정하여 부드러운 사다리꼴 프로파일 활성화
+        # 값이 낮을수록 반응이 빠르고, 높을수록 부드럽습니다.
+        accel_value = 20 # (0=즉각 반응, 20=부드럽고 빠름, 50=매우 부드러움)
+        
+        io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, C.PROFILE_VELOCITY)
+        io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, C.PROFILE_VELOCITY)
+        
+        io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+        io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+
     print(f"▶ 카메라({camera_index})를 여는 중입니다...")
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
     
@@ -278,6 +290,17 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             _publish_frame(frame)
 
     finally:
+        print(f"🤖 추적 모터(Pan/Tilt) 설정 초기화 (가속도 0, 속도 100)...")
+        try:
+            with lock:
+                default_velocity = 100 # init.py의 기본 속도
+                io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, default_velocity)
+                io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, default_velocity)
+                
+                io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_ACCELERATION, 0) # 가속도 0 (기본값)
+                io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, 0) # 가속도 0 (기본값)
+        except Exception as e:
+            print(f"⚠️  추적 모터 설정 초기화 중 오류: {e}")
         try: cap.release()
         except Exception: pass
         landmarker.close()

@@ -134,10 +134,20 @@ FAREWELL_TEXT = _get_env("FAREWELL_TEXT", "도움이 되었길 바라요. 언제
 ENABLE_GREETING = _get_env("ENABLE_GREETING", "1") not in ("0", "false", "False")
 
 def _extract_text(resp) -> str:
-    t = getattr(resp, "text", None)
-    if t and str(t).strip():
-        return str(t).strip()
+    """
+    Gemini 응답 객체에서 (thought) 과정을 제외하고,
+    사용자에게 보여줄 최종 텍스트만 추출합니다.
+    """
     try:
+        # 1. 가장 이상적인 경로: .text 속성에 바로 답변이 있는 경우
+        t = getattr(resp, "text", None)
+        if t and str(t).strip():
+            # (thought)가 포함되어 있는지 확인
+            clean_t = str(t).strip()
+            if not clean_t.startswith("(thought)"):
+                return clean_t
+
+        # 2. 표준 경로: .candidates 리스트에서 parts 순회
         pieces = []
         for c in getattr(resp, "candidates", []) or []:
             content = getattr(c, "content", None)
@@ -146,11 +156,31 @@ def _extract_text(resp) -> str:
                 pt = getattr(p, "text", None)
                 if pt and str(pt).strip():
                     pieces.append(str(pt).strip())
+        
         if pieces:
-            return "\n".join(pieces).strip()
-    except Exception: pass
-    try: return str(resp).strip()
-    except Exception: return ""
+            # 여러 조각이 있더라도 (thought)로 시작하는 것은 제외하고 합침
+            final_text = "\n".join(p for p in pieces if not p.startswith("(thought)"))
+            return final_text.strip()
+            
+        # 3. (thought)만 있고 최종 답변이 없는 경우 (예: 오류)
+        #    이 경우, 안전하게 빈 문자열을 반환
+        return ""
+
+    except Exception as e:
+        print(f"⚠️ _extract_text 오류: {e}")
+        try:
+            # 4. 최후의 수단 (기존 로직)
+            #    (thought)가 포함될 수 있지만, 아예 응답이 없는 것보다 나을 수 있음
+            fallback_text = str(resp).strip()
+            if fallback_text.startswith("(thought)"):
+                # 최후의 수단으로라도 (thought)는 제거 시도
+                lines = fallback_text.splitlines()
+                non_thought_lines = [line for line in lines if not line.strip().startswith("(thought)")]
+                if non_thought_lines:
+                    return "\n".join(non_thought_lines).strip()
+            return fallback_text # 최악의 경우 (thought)라도 반환
+        except Exception:
+            return "" # 최종 실패
 
 @dataclass
 class RecorderState:
@@ -595,11 +625,18 @@ class PressToTalk:
             return
 
         while not self.stop_nodding_event.is_set():
-            # 끄덕임 동작 수행 (1회)
+            # 끄덕임 횟수를 랜덤으로 결정합니다.
+            if random.random() < 0.3: # 20% 확률로
+                reps = 2 # 빠르게 두 번 끄덕이기
+                print("👂 (경청) 끄덕임 x2")
+            else: # 80% 확률로
+                reps = 1 # 한 번 끄덕이기
+                print("👂 (경청) 끄덕임 x1")
+
             if callable(self.perform_head_nod_cb):
                 try:
-                    # launcher를 통해 연결된 dance.py의 perform_head_nod(repetitions=1) 호출
-                    threading.Thread(target=self.perform_head_nod_cb, args=(1,), daemon=True).start()
+                    # 결정된 횟수(reps)만큼 끄덕임 스레드 시작
+                    threading.Thread(target=self.perform_head_nod_cb, args=(reps,), daemon=True).start()
                 except Exception as e:
                     print(f"⚠️ 경청 끄덕임 중 오류: {e}")
             
@@ -646,27 +683,31 @@ class PressToTalk:
 
         if not text_data:
             return
-
-        if isinstance(text_data, dict):
-            text_to_display = text_data.get("text", "")
-            if self.subtitle_queue and text_to_display:
-                self.subtitle_queue.put(text_to_display)
-            self.tts.speak(text_data)
-            return
         
-        text_to_process = str(text_data)
-        sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
-        sentences = [s.strip() for s in sentences if s.strip()]
-
-        if not sentences:
-            return
-
-        for sentence in sentences:
-            if self.subtitle_queue:
-                self.subtitle_queue.put(sentence)
+        self.raise_busy_signal()
+        try:
+            if isinstance(text_data, dict):
+                text_to_display = text_data.get("text", "")
+                if self.subtitle_queue and text_to_display:
+                    self.subtitle_queue.put(text_to_display)
+                self.tts.speak(text_data)
+                return
             
-            self.tts.speak(sentence)
-            self.tts.wait()
+            text_to_process = str(text_data)
+            sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
+            sentences = [s.strip() for s in sentences if s.strip()]
+
+            if not sentences:
+                return
+
+            for sentence in sentences:
+                if self.subtitle_queue:
+                    self.subtitle_queue.put(sentence)
+                
+                self.tts.speak(sentence)
+                self.tts.wait()
+        finally:
+            self.lower_busy_signal()
         
     def _announcement_worker(self):
         announcement_text = "한동의 미남 미녀 여러분 안녕하세요. 잠시만 주목해주세요! 8시부터 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요. "
@@ -801,6 +842,8 @@ class PressToTalk:
 
     def _stop_recording_and_transcribe(self):
         if not self.state.recording: return
+        if self.emotion_queue:
+            self.emotion_queue.put("NEUTRAL")
         self.last_activity_time = time.time()
         print("✅ User stopped speaking. Activity timer reset.")
         print("⏹️  녹음 종료, 전사 중...")
