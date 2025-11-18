@@ -175,10 +175,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                 bs = res.face_blendshapes[0]
                 
                 mouth_open_score = get_blendshape_score(bs, 'jawOpen')
-     
-                debug_counter += 1
-                if debug_counter % 5 == 0:
-                    print(f"👄 Mouth Score: {mouth_open_score:.4f} (Threshold: {MOUTH_OPEN_THRESHOLD})")
                 
                 is_mouth_currently_open = mouth_open_score > MOUTH_OPEN_THRESHOLD
                 current_time = time.time()
