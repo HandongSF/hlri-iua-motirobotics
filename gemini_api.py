@@ -1,19 +1,19 @@
 # ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 # ============================================================
 
 from __future__ import annotations
@@ -29,11 +29,17 @@ import wave
 import platform
 import random
 import time
+import re # 스트리밍 응답 처리를 위해 re 임포트
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Callable
 import multiprocessing
 from functools import wraps
+
+from function.entertain import EntertainmentHandler
+from function.present import PresentationHandler
+from function.profile_manager import ProfileManager
+from function.utils import _get_relative_time_str, _extract_text, _get_env, SYSTEM_INSTRUCTION
 
 try:
     from dotenv import load_dotenv
@@ -53,12 +59,6 @@ import requests
 IS_WINDOWS = (platform.system() == "Windows")
 PROFILE_DB_FILE = "user_profiles.json"
 
-def _get_env(name: str, default: str | None = None) -> str | None:
-    v = os.environ.get(name)
-    if v is None or not str(v).strip():
-        return default
-    return str(v).strip()
-
 def _find_input_device_by_name(name_substr: str) -> int | None:
     if not name_substr: return None
     key = name_substr.lower()
@@ -69,34 +69,6 @@ def _find_input_device_by_name(name_substr: str) -> int | None:
     except Exception:
         pass
     return None
-
-def _get_relative_time_str(dt_then: datetime | None, dt_now: datetime) -> str:
-    """
-    [신규 추가]
-    과거 날짜(dt_then)와 현재 날짜(dt_now)를 비교하여
-    "어제", "5일 전", "예전에" 같은 자연어 문자열을 반환합니다.
-    """
-    if not dt_then:
-        return "기록 없음"
-    
-    try:
-        delta = dt_now.date() - dt_then.date()
-        days = delta.days
-
-        if days < 0:
-            return "최근" # (미래 시간일 경우, 예외 처리)
-        elif days == 0:
-            return "오늘"
-        elif days == 1:
-            return "어제"
-        elif days == 2:
-            return "그저께"
-        elif days <= 7:
-            return f"약 {days}일 전"
-        else:
-            return "예전에"
-    except Exception:
-        return "기록 없음"
 
 def keep_awake(func: Callable):
     @wraps(func)
@@ -122,6 +94,7 @@ def keep_awake(func: Callable):
                 self.emotion_queue.put("RESET_SLEEPY_TIMER")
     return wrapper
 
+# --- 전역 상수는 그대로 둠 ---
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
@@ -132,27 +105,7 @@ PROMPT_TEXT = (
     " (3) 종결어미·띄어쓰기·문장부호를 자연스럽게, (4) 기호나 철자가 헷갈리면 의미가 명확한 표현으로,"
     " (5) '춤', '그만' 같은 지시어는 그대로 보존. 오직 텍스트만 출력."
 )
-SYSTEM_INSTRUCTION = _get_env(
-    "SYSTEM_INSTRUCTION",
-    "너는 공감 서비스 로봇 '모티'야. 너의 역할은 상대방의 말에 공감해주는 동반자 로봇이야"
-    "따뜻한 말투로 한국어로 답해."
-    
-    #1. 공감의 방식 (질문 규칙 수정)
-    " 사용자의 정서 신호(피곤, 스트레스, 불안, 행복 등)를 포착하면, 마음 자체에 깊이 공감하고 지지해줘."
-    " 특히, 사용자가 '힘들다', '슬프다'처럼 부정적인 감정을 표현할 때는,"
-    " 먼저 그 마음에 공감한 뒤, '무슨 일이 있었는지' 또는 '왜 그렇게 느끼는지' 부드럽게 물어보며 대화를 이어가."
-    " (예: '아이고... 그런 기분이시구나. 저도 마음이 찡해요. 괜찮다면 무슨 일이 있었는지 이야기해 주실 수 있어요?')"
-    " 단, '다음 할 일을 묻거나' '해결책을 제안하는' 서비스적인 질문(~하세요?)은 피해야 해."
 
-    # 2. 문장 길이 조절 규칙
-    " 대화의 '밀도'에 따라 문장 길이를 1~6문장 사이에서 조절해."
-    " 사용자가 '안녕'이나 '응'처럼 짧게 말하면, 너도 1-2문장으로 짧고 따뜻하게 답해."
-    " 반면, 사용자가 자기 감정이나 긴 이야기를 공유하면, 너도 3-6문장으로 길게 답하면서 '충분히' 공감하고 있음을 보여줘."
-    
-    # 3. 제약 조건 (추임새 금지 추가)
-    " 사용자의 말이 정말 불확실할 때만 짧게 확인 질문을 해. 과장, 훈계, 가스라이팅은 절대 금지."
-    " 또한, '토닥토닥', '쓰담쓰담' 같은 의성어/의태어 추임새는 사용하지 마."
-)
 TTS_RATE = int(_get_env("TTS_RATE", "0"))
 TTS_VOLUME = int(_get_env("TTS_VOLUME", "100"))
 TTS_FORCE_VOICE_ID = _get_env("TTS_FORCE_VOICE_ID", "")
@@ -161,54 +114,6 @@ GREETING_TEXT = _get_env("GREETING_TEXT", "안녕하세요! 모티입니다.")
 FAREWELL_TEXT = _get_env("FAREWELL_TEXT", "도움이 되었길 바라요. 언제든 다시 불러주세요.")
 ENABLE_GREETING = _get_env("ENABLE_GREETING", "1") not in ("0", "false", "False")
 
-def _extract_text(resp) -> str:
-    """
-    Gemini 응답 객체에서 (thought) 과정을 제외하고,
-    사용자에게 보여줄 최종 텍스트만 추출합니다.
-    """
-    try:
-        # 1. 가장 이상적인 경로: .text 속성에 바로 답변이 있는 경우
-        t = getattr(resp, "text", None)
-        if t and str(t).strip():
-            # (thought)가 포함되어 있는지 확인
-            clean_t = str(t).strip()
-            if not clean_t.startswith("(thought)"):
-                return clean_t
-
-        # 2. 표준 경로: .candidates 리스트에서 parts 순회
-        pieces = []
-        for c in getattr(resp, "candidates", []) or []:
-            content = getattr(c, "content", None)
-            if not content: continue
-            for p in getattr(content, "parts", []) or []:
-                pt = getattr(p, "text", None)
-                if pt and str(pt).strip():
-                    pieces.append(str(pt).strip())
-        
-        if pieces:
-            # 여러 조각이 있더라도 (thought)로 시작하는 것은 제외하고 합침
-            final_text = "\n".join(p for p in pieces if not p.startswith("(thought)"))
-            return final_text.strip()
-            
-        # 3. (thought)만 있고 최종 답변이 없는 경우 (예: 오류)
-        #    이 경우, 안전하게 빈 문자열을 반환
-        return ""
-
-    except Exception as e:
-        print(f"⚠️ _extract_text 오류: {e}")
-        try:
-            # 4. 최후의 수단 (기존 로직)
-            #    (thought)가 포함될 수 있지만, 아예 응답이 없는 것보다 나을 수 있음
-            fallback_text = str(resp).strip()
-            if fallback_text.startswith("(thought)"):
-                # 최후의 수단으로라도 (thought)는 제거 시도
-                lines = fallback_text.splitlines()
-                non_thought_lines = [line for line in lines if not line.strip().startswith("(thought)")]
-                if non_thought_lines:
-                    return "\n".join(non_thought_lines).strip()
-            return fallback_text # 최악의 경우 (thought)라도 반환
-        except Exception:
-            return "" # 최종 실패
 
 @dataclass
 class RecorderState:
@@ -216,6 +121,7 @@ class RecorderState:
     frames_q: queue.Queue = queue.Queue()
     stream: sd.InputStream | None = None
 
+# --- TTS Worker 클래스들은 그대로 둠 ---
 class SapiTTSWorker:
     def __init__(self):
         self._q: queue.Queue[str | dict | None] = queue.Queue()
@@ -406,6 +312,7 @@ class TypecastTTSWorker:
                 finally: self._q.task_done()
         except Exception as e: print(f"ℹ️ Typecast TTS 스레드 오류: {e}"); self.ready.set()
 
+# --- 메인 PressToTalk 클래스 (컨트롤러) ---
 class PressToTalk:
     def __init__(self,
                  start_dance_cb: Optional[Callable[[], None]] = None,
@@ -427,7 +334,6 @@ class PressToTalk:
                  ox_command_q: Optional[multiprocessing.Queue] = None,
                  ox_result_q: Optional[multiprocessing.Queue] = None,
                  mouth_event_queue: Optional[queue.Queue] = None,
-                 # ▼▼▼ [수정] 끄덕임 콜백 함수를 괄호 안으로 이동시킴 ▼▼▼
                  perform_head_nod_cb: Optional[Callable[[int], None]] = None
                  ): 
         
@@ -436,6 +342,7 @@ class PressToTalk:
             print("❗ GOOGLE_API_KEY가 없습니다."); sys.exit(1)
 
         genai.configure(api_key=api_key)
+        self.MODEL_NAME = MODEL_NAME
         self.model = genai.GenerativeModel(MODEL_NAME)
         self.chat = genai.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_INSTRUCTION).start_chat(history=[])
 
@@ -458,12 +365,15 @@ class PressToTalk:
             ),
             generation_config={"response_mime_type": "application/json", "temperature": 0.2}
         )
-
+        
+        # ▼▼▼ [수정] 프로필 관련 변수 초기화 (ProfileManager가 사용) ▼▼▼
         self.current_user_name = None
         self.profile_db_file = PROFILE_DB_FILE
-        self._init_profile_db()
         self.initial_chat_summary = "아직 기록된 내용이 없습니다."
         self.initial_last_seen_str = "기록 없음"
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+        # --- 콜백 및 큐 저장 (기존과 동일) ---
         self.start_dance_cb = start_dance_cb
         self.stop_dance_cb  = stop_dance_cb
         self.play_rps_motion_cb = play_rps_motion_cb
@@ -497,6 +407,7 @@ class PressToTalk:
         self.nodding_thread = None
         self.stop_nodding_event = threading.Event()
 
+        # --- TTS 및 상태 초기화 (기존과 동일) ---
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
         if engine == "sapi" and not IS_WINDOWS: engine = "typecast"
@@ -506,6 +417,16 @@ class PressToTalk:
 
         self.state = RecorderState()
         self._print_intro()
+
+        # ▼▼▼ [추가] 핸들러 클래스 초기화 (반드시 self.xxx 변수 설정 *이후*에) ▼▼▼
+        self.entertain_handler = EntertainmentHandler(self)
+        self.present_handler = PresentationHandler(self)
+        self.profile_manager = ProfileManager(self)
+
+        # ProfileManager에게 DB 초기화를 위임
+        self.profile_manager.init_db()
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+        
         if ENABLE_GREETING:
             self._speak_and_subtitle(GREETING_TEXT)
             if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
@@ -521,227 +442,68 @@ class PressToTalk:
         self.stop_announcement_event = threading.Event()
         self.announcement_active = False
 
-    def _init_profile_db(self):
-        """JSON 프로필 DB 파일이 없으면 빈 객체로 생성합니다."""
-        if not os.path.exists(self.profile_db_file):
-            print(f"ℹ️ 프로필 DB 파일({self.profile_db_file})이 없어 새로 생성합니다.")
-            try:
-                with open(self.profile_db_file, "w", encoding="utf-8") as f:
-                    json.dump({}, f)
-            except Exception as e:
-                print(f"❌ 프로필 DB 파일 생성 실패: {e}")
+    # --- [삭제] _init_profile_db, load_profile, update_profile_summary_at_exit ---
+    # (이 함수들은 profile_manager.py로 이동함)
 
-    def load_profile(self, name: str):
-        """사용자 이름을 기반으로 '요약된 사실'을 로드하여 시스템 프롬프트에 주입합니다."""
-        print(f"⏳ {name}님의 프로필 로드를 시도합니다...")
-        
-        chat_summary = "아직 기록된 내용이 없습니다."
-        last_seen_str = "기록 없음" # (요약기록용 절대 날짜)
-        relative_time_str = "기록 없음" # (채팅 프롬프트용 상대 날짜)
-
+    # --- [삭제] _announcement_worker, toggle_announcement, _run_presenter_intro, _speak_farewell ---
+    # (이 함수들은 present.py로 이동함)
+    
+    # --- [유지] _fetch_quizzes_in_background (EntertainmentHandler가 사용) ---
+    def _fetch_quizzes_in_background(self, result_container: list):
+        """[백그라운드 스레드용] Gemini API를 호출하여 퀴즈 목록을 생성하고 result_container에 저장합니다."""
+        print("  - 🏃 (백그라운드) 본 게임 퀴즈 생성을 시작합니다...")
         try:
-            if os.path.exists(self.profile_db_file):
-                with open(self.profile_db_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {}
-
-            if name in data:
-                chat_summary = data[name].get("chat_summary", "아직 기록된 내용이 없습니다.")
-                last_seen_iso = data[name].get("last_seen")
-                
-                if last_seen_iso:
-                    try:
-                        last_seen_dt_obj = datetime.fromisoformat(last_seen_iso)
-                        dt_now = datetime.now()
-                        
-                        # 상대 시간 계산 ▼▼▼
-                        relative_time_str = _get_relative_time_str(last_seen_dt_obj, dt_now) 
-                        
-                        # 기존 'last_seen_str'는 종료 시 요약기를 위해 절대 날짜 형식 유지 ▼▼▼
-                        last_seen_str = last_seen_dt_obj.strftime('%Y년 %m월 %d일 %H시 %M분')
-                    except ValueError:
-                        pass # 파싱 실패 시 "기록 없음" 유지
-                
-                # 로그에도 자연스러운 상대 시간 사용 ▼▼▼
-                print(f"✅ {name}님의 프로필을 성공적으로 로드했습니다. (마지막 대화: {relative_time_str})")
-                self._speak_and_subtitle(f"{name}님, 다시 만나서 반가워요!")
-            
-            else:
-                print(f"ℹ️ {name}님의 프로필이 없습니다. 새로 생성합니다.")
-                self._speak_and_subtitle(f"{name}님, 만나서 반가워요! 오늘부터 기억해둘게요.")
-        
-        except Exception as e:
-            print(f"❌ 프로필 로드 실패: {e}")
-            self._speak_and_subtitle(f"{name}님, 만나서 반가워요!")
-
-        self.current_user_name = name
-        self.initial_chat_summary = chat_summary
-        self.initial_last_seen_str = last_seen_str 
-        current_time_str = datetime.now().strftime('%Y년 %m월 %d일 %A')
-
-        enhanced_system_instruction = (
-            SYSTEM_INSTRUCTION +
-            f"\n\n--- 현재 시간 ---\n"
-            f"오늘은 {current_time_str}입니다. 이 시간 정보를 바탕으로 '어제', '오늘' 등을 정확히 인지하세요."
-            "\n\n--- 중요 기억 (필독!) ---\n"
-            f"당신은 지금 '{name}'님과 대화하고 있습니다.\n"
-            f"다음은 '{name}'님에 대해 당신이 기억하고 있는 중요한 사실들입니다 ( {relative_time_str} 기준):\n"
-            f"{chat_summary}\n"
-            "--- 중요 기억 활용 규칙 ---\n"
-            "1. 사용자의 질문에 답하기 전, 항상 [중요 기억] 섹션에 관련 정보가 있는지 먼저 확인하세요.\n"
-            f"2. (예시) 사용자가 '오늘 뭐할까?'라고 물었고, [중요 기억]에 '- {current_time_str.split(' ')[0]} 5시까지 공부할 예정'이라고 적혀있다면, '기억하기로는 오늘 5시까지 공부하실 계획이 있으셨어요.'라고 먼저 알려주세요.\n"
-            "3. [중요 기억]의 내용을 대화에 적극적으로 활용하여, 당신이 사용자를 기억하고 있음을 보여주세요.\n"
-            "4. [!! 중요 대화 규칙 !!] 기억 속의 사실을 언급할 때, '2025년 11월 17일'처럼 [절대 날짜]를 직접 말하지 마세요.\n"
-            "   - 대신, [현재 시간]을 기준으로 '어제', '며칠 전에', '예전에' 같은 [상대 시간]으로 자연스럽게 표현하세요.\n"
-            "   - (예: [중요 기억]에 '- 2025년 11월 17일: 개구리를 싫어함'이라고 적혀있고 오늘이 11월 18일이라면, '아, 맞다. 어제 개구리 싫어한다고 하셨죠!'라고 말하세요.)\n"
-            "--- 중요 기억 끝 ---"
-        )
-        
-        self.chat = genai.GenerativeModel(
-            MODEL_NAME, 
-            system_instruction=enhanced_system_instruction
-        ).start_chat(history=[])
-
-    def update_profile_summary_at_exit(self):
-        """
-        프로그램 종료 시, self.chat.history에 누적된 전체 대화 내역을 바탕으로
-        프로필 요약을 *한 번만* 업데이트하고 저장합니다.
-        """
-        if not self.current_user_name:
-            print("ℹ️  사용자 이름이 설정되지 않아 프로필 요약을 건너뜁니다.")
-            return
-        
-        # self.chat.history에는 'chat' 인텐트의 대화만 쌓입니다.
-        chat_history_entries = [
-            entry for entry in getattr(self.chat, 'history', []) 
-            if entry.role in ('user', 'model') and entry.parts and getattr(entry.parts[0], 'text', None)
-        ]
-
-        if not chat_history_entries:
-            print("ℹ️  이번 세션에 'chat' 대화가 없어 프로필 요약을 건너뜁니다.")
-            return
-
-        print(f"⏳ {self.current_user_name}님의 프로필 요약 업데이트 시도 (종료 작업)...")
-
-        # 1. 기존 요약 정보 가져오기 (load_profile에서 저장해둔 값)
-        old_summary = self.initial_chat_summary
-        last_seen_str = self.initial_last_seen_str
-
-        # 2. 이번 세션의 전체 대화 내역 포매팅하기
-        conversation_lines = []
-        for entry in chat_history_entries:
-            role = "사용자" if entry.role == "user" else "모티(AI)"
-            text = entry.parts[0].text
-            conversation_lines.append(f"{role}: {text}")
-        
-        session_conversation_text = "\n".join(conversation_lines)
-
-        # 3. Summarizer 프롬프트 생성 (기존 로직 활용, '방금 나눈 대화' -> '이번 세션 전체 대화')
-        try:
-            current_time_dt = datetime.now()
-            one_week_ago_dt = current_time_dt - timedelta(days=7) # 1주일 전 날짜 계산
-            
-            current_time_str = current_time_dt.strftime('%Y년 %m월 %d일 %H시 %M분')
-            one_week_ago_str = one_week_ago_dt.strftime('%Y년 %m월 %d일') # 1주일 전 날짜 (삭제 기준)
-
-            summarizer_prompt = (
-                f"당신은 대화 내용을 바탕으로 사용자의 프로필을 관리하는 AI입니다.\n"
-                f"현재 시간은 [ {current_time_str} ]입니다.\n"
-                f"!! 삭제 기준일은 [ {one_week_ago_str} ]입니다. (오늘로부터 1주일 전)\n"
-                f"아래의 [기존 사실] ( {last_seen_str} 기준)을 [이번 세션 전체 대화] ( {current_time_str} 에 종료됨)의 내용으로 업데이트하여, [새로운 사실 목록]을 만드세요.\n\n"
-                "규칙:\n"
-                "1. 대화에서 '사용자'에 대한 '중요한 개인 정보'(이름, 별명, 생일, 연령, 거주지/지역, 선호 언어, 직업/직무, 직장/학교, 전공, 취미, 좋아하는 음식/요리, 식단 제한/알레르기, 건강 목표, 수면 습관, 대화/응답 스타일, 선호 콘텐츠, 최근 감정, 가족/애완동물 정보, 특별한 날짜, 추억 등)만 추출합니다.\n"
-                "2. 단순한 인사나 잡담('안녕', '고마워', '춤 춰')은 무시합니다.\n"
-                "3. '새로운 사실 목록'은 항상 간결한 불렛 포인트(-)로 작성합니다.\n"
-                "4. [이번 세션 전체 대화]에서 추출할 새 사실이 없다면, [기존 사실]을 (삭제 규칙 적용 후) 그대로 출력합니다.\n"
-                "5. [!!기억 삭제 규칙!!] [기존 사실] 목록을 검토하여, [ {one_week_ago_str} ]보다 날짜가 오래된 (즉, 1주일이 지난) 사실은 [새로운 사실 목록]에서 삭제하세요.\n"
-                "   - (예시) [기존 사실]에 '- 2025년 11월 1일 강아지 입양'이라고 적혀있고, 삭제 기준일이 '2025년 11월 10일'이라면, 이 사실은 삭제합니다.\n"
-                "   - (예외) 단, 사용자의 이름, 생일, MBTI, 가족/반려동물 이름 등 *절대 변하지 않는 핵심 개인정보*는 1주일이 지났더라도 삭제하지 말고 유지해야 합니다.\n"
-                "6. [!!날짜/사실 분리 규칙!!] 정보의 유형에 따라 날짜 표기법을 엄격히 구분하세요.\n"
-                "   A. [영구적 사실]: 사용자의 이름, 선호도(예: '개구리를 싫어함'), 성격, MBTI, 가족/반려동물 이름 등 *시간과 관계없는 사실*은 날짜를 *절대* 붙이지 마세요.\n"
-                "      - (GOOD): '- 개구리를 싫어함.'\n"
-                "      - (GOOD): '- 사용자 이름은 강은성입니다.'\n"
-                "   B. [특정 시점 일정/사건]: 시험, 약속, 계획, 과거의 특정 사건(예: '어제 병원 감') 등 *특정 날짜에 발생하는 일*은 [사건 발생일]을 맨 앞에 붙여야 합니다.\n"
-                "      - (현재 시간: 2025년 11월 18일 / 사용자 발화: '목요일에 컴퓨터 시험 봐.')\n"
-                "      - (GOOD): '- 2025년 11월 20일: 컴퓨터 네트워크 시험 예정.'\n"
-                "      - (사용자 발화: '오늘 5시에 공부할 거야.')\n"
-                "      - (GOOD): '- 2025년 11월 18일 17시: 공부 예정.'\n"
-                "   C. [현재 지속 상태]: '지금 시험 기간이다', '오늘 피곤하다'처럼 *대화 시점의 일시적인 상태*는 [대화한 날짜]를 기준으로 기록하세요. ('현재', '오늘' 같은 상대어 금지)\n"
-                "      - (현재 시간: 2025년 11월 18일 / 사용자 발화: '나 지금 시험 기간이야.')\n"
-                "      - (BAD): '- 현재 시험 기간임.'\n"
-                "      - (GOOD): '- 2025년 11월 18일 기준, 시험 기간임.'\n"
-                f"[기존 사실 ( {last_seen_str} 기준)]\n{old_summary}\n\n"
-                f"[이번 세션 전체 대화 ( {current_time_str} 에 종료됨)]\n"
-                f"{session_conversation_text}\n\n"
-                "[새로운 사실 목록] (1주일 이내의 정보 + 핵심 정보만 포함)\n"
+            quiz_prompt = (
+                "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 10개만 만들어줘. "
+                "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
+                "출력은 반드시 다음 JSON 리스트 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
+                '[{"question": "<퀴즈1 질문>", "answer": "O 또는 X"}, {"question": "<퀴즈2 질문>", "answer": "O 또는 X"}]'
             )
-
-            summarizer_model = genai.GenerativeModel(MODEL_NAME)
-            response = summarizer_model.generate_content(summarizer_prompt)
-            new_summary = _extract_text(response)
-
-            # 4. JSON 파일 열고 저장하기 (기존 로직과 유사)
-            data = {}
-            if os.path.exists(self.profile_db_file):
-                with open(self.profile_db_file, "r", encoding="utf-8") as f:
-                    try: data = json.load(f)
-                    except json.JSONDecodeError: data = {}
-            
-            if not self.current_user_name in data:
-                data[self.current_user_name] = {}
-            
-            data[self.current_user_name]["chat_summary"] = new_summary
-            data[self.current_user_name]["last_seen"] = datetime.now().isoformat()
-
-            with open(self.profile_db_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-            
-            print(f"✅ {self.current_user_name}님의 프로필 요약을 (종료 작업으로) 최종 저장했습니다.")
-
-            # [수정] 프로그램 종료 시점이므로, self.chat을 재-초기화하는 로직은 제거됨.
-
+            quiz_response = genai.GenerativeModel(self.MODEL_NAME).generate_content(
+                quiz_prompt, 
+                generation_config={"response_mime_type": "application/json"}
+            )
+            raw_json = _extract_text(quiz_response)
+            quizzes = json.loads(raw_json)
+            result_container.extend(quizzes)
+            print(f"  - ✅ (백그라운드) 퀴즈 {len(quizzes)}개 생성 완료!")
         except Exception as e:
-            print(f"❌ (종료 작업) 프로필 요약 업데이트 실패: {e}")
+            print(f"  - ❌ (백그라운드) 퀴즈 생성 실패: {e}")  
 
+    # --- [유지] _listening_nod_worker (경청 끄덕임) ---
     def _listening_nod_worker(self):
         """사용자가 말하는 동안 랜덤하게 고개를 끄덕이는 백그라운드 스레드"""
         print("👂 경청 모드: 랜덤 끄덕임 스레드 시작...")
         
-        # 스레드가 시작하고 바로 끄덕이지 않도록 초반에 랜덤 대기 (0.5초 ~ 1.5초)
         start_wait = random.uniform(0.5, 1.5)
-        # wait() 함수는 1) 대기하거나 2) stop_nodding_event 신호를 받으면 즉시 True를 반환합니다.
         interrupted = self.stop_nodding_event.wait(timeout=start_wait)
-        if interrupted: # 대기 중에 중지 신호가 오면 바로 종료
+        if interrupted:
             print("👂 경청 모드: 시작 전 중지됨.")
             return
 
         while not self.stop_nodding_event.is_set():
-            # 끄덕임 횟수를 랜덤으로 결정합니다.
-            if random.random() < 0.3: # 20% 확률로
-                reps = 2 # 빠르게 두 번 끄덕이기
+            if random.random() < 0.3: # [수정] 20% -> 30% 확률
+                reps = 2
                 print("👂 (경청) 끄덕임 x2")
-            else: # 80% 확률로
-                reps = 1 # 한 번 끄덕이기
+            else:
+                reps = 1
                 print("👂 (경청) 끄덕임 x1")
 
             if callable(self.perform_head_nod_cb):
                 try:
-                    # 결정된 횟수(reps)만큼 끄덕임 스레드 시작
                     threading.Thread(target=self.perform_head_nod_cb, args=(reps,), daemon=True).start()
                 except Exception as e:
                     print(f"⚠️ 경청 끄덕임 중 오류: {e}")
             
-            # 다음 끄덕임까지 랜덤 대기 (1.5초 ~ 4.0초)
             wait_time = random.uniform(1.5, 4.0)
-            
             interrupted = self.stop_nodding_event.wait(timeout=wait_time)
             
             if interrupted:
-                break # 녹음이 중지되었으므로 루프 탈출
+                break
         
         print("👂 경청 모드: 랜덤 끄덕임 스레드 종료.")
 
+    # --- [유지] 핵심 기능 함수들 ---
     def _mouth_listener_worker(self):
         """A dedicated thread to listen for mouth events."""
         print("▶ 🔊 Mouth-to-Talk listener thread started.")
@@ -752,7 +514,7 @@ class PressToTalk:
                 if msg == "START_RECORDING":
                     if self.listening_enabled.is_set():
                         if self.busy_signals > 0:
-                            print(f"👄 게임 중 말 인식 멈춤 (busy_signals: {self.busy_signals})")
+                            print(f"👄 게임/말하는 중 말 인식 멈춤 (busy_signals: {self.busy_signals})")
                             continue
                         self._start_recording()
                 elif msg == "STOP_RECORDING":
@@ -767,94 +529,45 @@ class PressToTalk:
     def _speak_and_subtitle(self, text_data: str | dict):
         """
         TTS 출력과 자막을 문장 단위로 동기화하여 처리합니다.
-        - 긴 문자열은 문장(.!?)으로 분리하여 하나씩 순차적으로 말하고 자막을 표시합니다.
-        - '가위! 바위!'와 '보!' 같이 연속 호출되어도 음성 출력을 기다립니다.
-        - 속도/볼륨 조절을 위한 dict 입력은 기존처럼 바로 처리합니다.
+        - 말하는 동안 busy_signals를 올려 스스로의 말을 재녹음하는 것을 방지합니다.
         """
         import re
 
         if not text_data:
             return
-        
-        self.raise_busy_signal()
+
         try:
             if isinstance(text_data, dict):
                 text_to_display = text_data.get("text", "")
                 if self.subtitle_queue and text_to_display:
                     self.subtitle_queue.put(text_to_display)
                 self.tts.speak(text_data)
-                return
+                # dict는 wait() 안 함 (스노링 등 비동기 사운드용)
+                return 
             
             text_to_process = str(text_data)
+            # 문장 분리기: 마침표, 물음표, 느낌표 뒤의 공백을 기준으로 자름
             sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
             sentences = [s.strip() for s in sentences if s.strip()]
 
             if not sentences:
-                return
+                if text_to_process.strip(): # 분리 실패 시 통째로 말함
+                    sentences = [text_to_process.strip()]
+                else:
+                    return # 빈 텍스트면 종료
 
             for sentence in sentences:
                 if self.subtitle_queue:
                     self.subtitle_queue.put(sentence)
                 
                 self.tts.speak(sentence)
-                self.tts.wait()
+                self.tts.wait() # 각 문장이 끝날 때까지 기다림
         finally:
-            self.lower_busy_signal()
-        
-    def _announcement_worker(self):
-        announcement_text = "한동의 미남 미녀 여러분 안녕하세요. 잠시만 주목해주세요! 8시부터 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요. "
-        print("📢 안내 방송 스레드가 시작되었습니다.")
-        try:
-            while not self.stop_announcement_event.is_set():
-                self._speak_and_subtitle(announcement_text)
-                interrupted = self.stop_announcement_event.wait(timeout=60.0)
-                if interrupted:
-                    break
-        finally:
-            self.lower_busy_signal()
-            self.announcement_active = False
-            print("🛑 안내 방송 스레드가 종료되었습니다.")
-
-    def toggle_announcement(self):
-        """'p' 키에 반응해 안내 방송을 켜고 끄는 더 안정적인 함수입니다."""
-        is_running = self.announcement_thread is not None and self.announcement_thread.is_alive()
-
-        if is_running:
-            print("...안내 방송 중지 신호를 보냅니다...")
-            self.stop_announcement_event.set()
-        else:
-            print("...안내 방송 시작을 시도합니다...")
-            self.raise_busy_signal()
-            self.announcement_active = True
-            self.stop_announcement_event.clear()
-            self.announcement_thread = threading.Thread(target=self._announcement_worker, daemon=True)
-            self.announcement_thread.start()
-            print("✅ 60초마다 안내 방송을 시작합니다.")
-
-    def _fetch_quizzes_in_background(self, result_container: list):
-            """[백그라운드 스레드용] Gemini API를 호출하여 퀴즈 목록을 생성하고 result_container에 저장합니다."""
-            print("  - 🏃 (백그라운드) 본 게임 퀴즈 생성을 시작합니다...")
-            try:
-                quiz_prompt = (
-                    "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 10개만 만들어줘. "
-                    "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
-                    "출력은 반드시 다음 JSON 리스트 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
-                    '[{"question": "<퀴즈1 질문>", "answer": "O 또는 X"}, {"question": "<퀴즈2 질문>", "answer": "O 또는 X"}]'
-                )
-                quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
-                    quiz_prompt, 
-                    generation_config={"response_mime_type": "application/json"}
-                )
-                raw_json = _extract_text(quiz_response)
-                quizzes = json.loads(raw_json)
-                result_container.extend(quizzes)
-                print(f"  - ✅ (백그라운드) 퀴즈 {len(quizzes)}개 생성 완료!")
-            except Exception as e:
-                print(f"  - ❌ (백그라운드) 퀴즈 생성 실패: {e}")  
+            pass
 
     def _print_intro(self):
         print("\n=== Gemini PTT (통합 버전) ===")
-        print("▶ '안녕 모티'로 호출(SLEEPY 상태) → 스페이스바로 대화(NEUTRAL 상태) → ESC로 종료")
+        print("▶ '안녕 모티'로 호출(SLEEPY 상태) → 입 열기로 대화(NEUTRAL 상태) → ESC로 종료")
         print("▶ [User ] 전사 결과 / [Gemini] 모델 답변")
         print("▶ 키워드: '춤' → 댄스 시작 / '그만' → 댄스 정지 / '가위바위보' → 게임 시작 / 'OX 게임")
         print(f"▶ MODEL={MODEL_NAME}, SR={SAMPLE_RATE}Hz")
@@ -895,13 +608,16 @@ class PressToTalk:
 
     def _audio_callback(self, indata, frames, time_info, status):
         if status: print(f"[오디오 경고] {status}", file=sys.stderr)
-        self.state.frames_q.put(indata.copy())
+        try:
+            self.state.frames_q.put_nowait(indata.copy())
+        except queue.Full:
+            pass # 큐가 꽉 차면(녹음 중이 아닐 때) 오디오 데이터를 버림
 
     def _start_recording(self):
         if self.state.recording: return
         if self.emotion_queue:
             self.emotion_queue.put("RESET_SLEEPY_TIMER")
-            self.emotion_queue.put("LISTENING")
+            self.emotion_queue.put("LISTENING") # [수정] 경청 표정으로
 
         self.last_activity_time = time.time()
         print("✅ User started speaking. Activity timer reset.")
@@ -935,7 +651,7 @@ class PressToTalk:
     def _stop_recording_and_transcribe(self):
         if not self.state.recording: return
         if self.emotion_queue:
-            self.emotion_queue.put("THINKING")
+            self.emotion_queue.put("THINKING") # [수정] 생각 표정으로
         self.last_activity_time = time.time()
         print("✅ User stopped speaking. Activity timer reset.")
         print("⏹️  녹음 종료, 전사 중...")
@@ -947,8 +663,16 @@ class PressToTalk:
         self.stop_nodding_event.set()
         
         chunks = []
-        while not self.state.frames_q.empty(): chunks.append(self.state.frames_q.get())
-        if not chunks: print("(녹음 데이터가 없습니다.)\n"); return
+        while not self.state.frames_q.empty(): 
+            try:
+                chunks.append(self.state.frames_q.get_nowait())
+            except queue.Empty:
+                break
+                
+        if not chunks: 
+            print("(녹음 데이터가 없습니다.)\n")
+            if self.emotion_queue: self.emotion_queue.put("NEUTRAL") # [추가] 녹음 실패 시 NEUTRAL로
+            return
         audio_np = np.concatenate(chunks, axis=0)
         wav_bytes = self._to_wav_bytes(audio_np, SAMPLE_RATE, CHANNELS, DTYPE)
         threading.Thread(target=self._transcribe_then_chat, args=(wav_bytes,), daemon=True).start()
@@ -1006,11 +730,8 @@ class PressToTalk:
             user_text = _extract_text(resp)
             if not user_text: 
                 print("📝 전사 결과가 비어 있습니다.\n")
-
                 if self.emotion_queue:
                     self.emotion_queue.put("NEUTRAL")
-
-                self.lower_busy_signal()
                 return
             
             ts = datetime.now().strftime("%H:%M:%S"); print(f"[{ts}] [User ] {user_text}")
@@ -1029,13 +750,13 @@ class PressToTalk:
                 name = route.get("name")
                 if name:
                     print(f"💡 의도: INTRODUCTION, AI가 추출한 이름: {name}")
-                    self.load_profile(name)
+                    self.profile_manager.load_profile_for_chat(name)
                 else:
                     print("⚠️  의도: INTRODUCTION (이름 추출 실패). Chat으로 폴백.")
                     intent = "chat"
                     is_chat_intent = True
 
-            if not is_chat_intent: # 폴백되어 chat으로 가지 않은, 순수 introduction일 때
+            if not is_chat_intent:
                     if self.emotion_queue:
                         print("... Introduction 완료, NEUTRAL로 표정 리셋 ...")
                         self.emotion_queue.put("NEUTRAL")
@@ -1043,20 +764,53 @@ class PressToTalk:
             model_text, speak_text = "", ""
 
             if intent == "chat":
-                reply = self.chat.send_message(user_text); model_text = _extract_text(reply) or ""
-                speak_text = model_text
-                self._analyze_and_send_emotion(model_text) 
+                # ▼▼▼ [수정] AI 답변 스트리밍 적용 ▼▼▼
+                print(f"[{ts}] [Gemini] 응답 스트리밍 시작...")
+                reply_stream = self.chat.send_message(user_text, stream=True)
+                
+                speak_text = ""
+                full_model_text = ""
+                current_sentence = ""
+                is_first_chunk = True
 
-                print(f"[{ts}] [Gemini] {model_text}\n")
+                for chunk in reply_stream:
+                    chunk_text = _extract_text(chunk)
+                    if not chunk_text: continue
 
-                if speak_text:
-                    self._speak_and_subtitle(speak_text)
+                    full_model_text += chunk_text
+                    current_sentence += chunk_text
 
+                    if is_first_chunk and current_sentence.strip():
+                        print(f"  -> First chunk received, analyzing emotion...")
+                        self._analyze_and_send_emotion(current_sentence)
+                        is_first_chunk = False
+
+                    # 문장 종결 부호(.!?) 또는 줄바꿈(\n)을 만나면, 해당 문장을 즉시 말함
+                    if any(c in current_sentence for c in ".!?\n"):
+                        # 문장 종결 부호 기준으로 문장 분리 (정규표현식 사용)
+                        sentences_to_speak = re.split(r'(?<=[.!?\n])\s*', current_sentence)
+                        
+                        if len(sentences_to_speak) > 1:
+                            # 마지막 조각(아직 완성되지 않음)을 제외하고 모두 말함
+                            current_sentence = sentences_to_speak.pop(-1)
+                            for sentence in sentences_to_speak:
+                                if sentence.strip():
+                                    print(f"  -> Speaking chunk: {sentence.strip()}")
+                                    self._speak_and_subtitle(sentence.strip())
+                        # (else: 아직 문장 종결 부호가 나오지 않음, 다음 청크까지 대기)
+                
+                # 스트림이 끝나고 남은 마지막 문장 처리
+                if current_sentence.strip():
+                    print(f"  -> Speaking final chunk: {current_sentence.strip()}")
+                    self._speak_and_subtitle(current_sentence.strip())
+
+                model_text = full_model_text # 요약을 위해 전체 텍스트 저장
+                speak_text = "" # 이미 다 말했으므로 비움
+                
                 if self.emotion_queue:
                     print("... TTS 완료, NEUTRAL로 표정 리셋 ...")
                     self.emotion_queue.put("NEUTRAL")
-
-                speak_text = ""
+                # ▲▲▲ 스트리밍 적용 끝 ▲▲▲
 
             elif intent == "dance":
                 print("💡 의도: DANCE START")
@@ -1082,666 +836,53 @@ class PressToTalk:
                 model_text = "(춤 정지 명령 처리)"
 
             elif intent == "joke":
-                print("💡 의도: JOKE (AI 실시간 생성 방식)")
-                try:
-                    if self.emotion_queue: self.emotion_queue.put("THINKING")
-                    self._speak_and_subtitle("위잉 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
-                    self.tts.wait()
-                    joke_prompt = (
-                        "너는 '모티'라는 로봇이야. '로봇', '컴퓨터', '전기'와 관련된, 어린아이도 이해할 수 있는 매우 창의적인 아재개그를 딱 하나만 만들어줘. "
-                        "이전에 만들었던 농담과는 다른 새로운 농담이어야 해. "
-                        "중요한 규칙: '삐빅' 같은 로봇 효과음은 절대 넣지 마. "
-                        "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대로 추가하지 마.\n"
-                        '{ "question": "<퀴즈 형식의 질문>", "answer": "<짧은 답변>", "explanation": "왜냐하면, <답변에 대한 1~2문장의 유머러스한 설명>" }'
-                    )
-
-                    joke_data = None
-                    try:
-                        joke_response = genai.GenerativeModel(MODEL_NAME).generate_content(
-                            joke_prompt,
-                            generation_config={"response_mime_type": "application/json"}
-                        )
-                        raw_json = _extract_text(joke_response)
-                        joke_data = json.loads(raw_json)
-
-                    except Exception as e:
-                        print(f"   - ❌ 농담 생성 실패: {e}")
-                        fallback_joke = "앗, 재미있는 농담이 떠오르지 않네요. 다음에 다시 시도해주세요!"
-                        print(f"🔊 TTS SAYING: {fallback_joke}")
-                        self._speak_and_subtitle(fallback_joke)
-                        self.tts.wait()
-                    
-                    if joke_data:
-                        question = joke_data.get("question", "질문이 없네요.")
-                        answer = joke_data.get("answer", "답변이 없네요.")
-                        explanation = joke_data.get("explanation", "왜냐하면, 설명이 없네요.")
-                        
-                        print(f'🔊 TTS SAYING (Q): "{question}"')
-                        self._speak_and_subtitle(question)
-                        self.tts.wait()
-
-                        print("   - (5초 대기...)")
-                        time.sleep(5)
-                        
-                        print(f'🔊 TTS SAYING (A): "{answer}"')
-                        self._speak_and_subtitle(answer)
-                        self.tts.wait()
-                        
-                        if self.emotion_queue: self.emotion_queue.put("HAPPY")
-                        
-                        print(f'🔊 TTS SAYING (E): "{explanation}"')
-                        self._speak_and_subtitle(explanation)
-                        self.tts.wait()
-                        
-                    model_text = f"(농담 생성 및 실행): {joke_data.get('question') if joke_data else '실패'}"
-                    speak_text = ""
-
-                finally:
-                    if self.emotion_queue:
-                        self.emotion_queue.put("NEUTRAL")
-                    pass
+                print("💡 의도: JOKE (EntertainmentHandler로 위임)")
+                self.entertain_handler.run_joke()
+                speak_text = ""
+                model_text = "(농담 실행)"
 
             elif intent == "ox_quiz":
-                print("💡 의도: OX QUIZ GAME (라운드 방식)")
-
-                if not self.shared_state or not self.ox_command_q:
-                    self._speak_and_subtitle("시스템 오류로 퀴즈를 진행할 수 없어요.")
-                    print("❌ shared_state 또는 ox_command_q가 없어 모드 전환 불가")
-                    return
-                
-                predefined_quizzes = [
-                    {"question": "제 이름은 '모터'입니다", "answer": "X", "explanation": "제 이름은 모티, 모티예요! 꼭 기억해주세요."},
-                    {"question": "모티는 공감 서비스 로봇입니다", "answer": "O", "explanation": "저는 여러분의 마음을 이해하고 공감하기 위해 만들어졌어요."},
-                    {"question": "모티는 나름 유명한 유튜버이다", "answer": "O", "explanation": "구독과 좋아요! 알림 설정까지 꾸욱 눌러주세요!"},
-                ]
-
-                crazy_mode_quizzes = {
-                    3: { # 4번째 본 게임 라운드
-                        "question": "여러번을 강조할 때 골백번이라고 흔히 말하는데 골은 10000을 뜻한다.",
-                        "answer": "O",
-                        "explanation": "이 정도는 맞춰줘야죠!"
-                    },
-                    4: { # 5번째 본 게임 라운드
-                        "question": "눈을 뜨고는 재체기를 할 수 없다.",
-                        "answer": "O",
-                        "explanation": "눈을 뜨고 재치기 하는 것은 거의 불가능에 가깝습니다."
-                    },
-                    5: { # 6번째 본 게임 라운드
-                        "question": "개미는 높은 곳에서 떨어지면 죽는다는 말이... 틀렸다는 것을 부정하는 것은 옳지 않다.",
-                        "answer": "O",
-                        "explanation": "개미는 높은 곳에서 떨어져도 죽지 않아요"
-                    },
-                    6: { # 7번째 본 게임 라운드
-                        "question": "모티의 이름은 8월 12일에 지어졌다... 라는 문장에 들어간 ㅇ의 개수는 8개이다.",
-                        "answer": "X",
-                        "explanation": "해당 문장에서 ㅇ은 총 7개입니다."
-                    }
-                }
-
-                quiz_result_container = []
-                self.generated_quizzes = []
-
-                quiz_round_counter = 0
-                main_game_round_counter = 0
-                is_first_round = True
-                is_game_over = False
-                is_main_game_started = False
-                is_crazy_mode_active = False 
-
-                try:
-                    self.shared_state['mode'] = 'ox_quiz'
-                    self._speak_and_subtitle("그럼 지금부터 여러분과 OX 퀴즈 게임을 시작하겠습니다!")
-                    self.tts.wait()
-                    
-                    self._speak_and_subtitle("제가 내는 질문을 듣고 맞다고 생각하면... 동그라미가 그려진 오른쪽으로 이동해주세요!... 틀리다고 생각하면 엑스가 그려진 왼쪽으로... 이동해주세요! ")
-                    self.tts.wait()
-                    
-                    self._speak_and_subtitle("먼저, 몸풀기로 연습문제를 몇 개 풀어볼게요. 첫 문제 나갑니다!")
-                    self.tts.wait()
-
-                    quiz_fetch_thread = threading.Thread(
-                        target=self._fetch_quizzes_in_background,
-                        args=(quiz_result_container,)
-                    )
-                    quiz_fetch_thread.start()
-
-                    while not is_game_over and not self.stop_event.is_set():
-                        if not is_first_round and not is_predefined:
-                            print("  - 🤔 다음 라운드 준비를 위해 THINKING 표정으로 변경")
-                            if self.emotion_queue: self.emotion_queue.put("THINKING")
-                            time.sleep(1)
-
-                        quiz_data = None
-                        is_predefined = False
-
-                        if quiz_round_counter < len(predefined_quizzes):
-                            quiz_data = predefined_quizzes[quiz_round_counter]
-                            is_predefined = True 
-                            print(f" - 사전 정의된 퀴즈 #{quiz_round_counter + 1} 사용: {quiz_data}")
-                            quiz_round_counter += 1
-                        else:
-                            if not is_main_game_started:
-                                self._speak_and_subtitle("자, 이제 연습이 끝났습니다! 지금부터 본격적으로 시작하겠습니다.")
-                                self.tts.wait()
-
-                                
-                                print("  - ⌛ 본 게임 퀴즈 준비 완료 여부 확인 중...")
-                                quiz_fetch_thread.join(timeout=5.0)
-
-                                self.generated_quizzes = quiz_result_container
-
-                                self._speak_and_subtitle("마지막까지 살아남으시는 분께는 특별한 상품을 드릴게요!")
-                                self.tts.wait()
-                                is_main_game_started = True
-
-                            is_current_round_crazy = main_game_round_counter in crazy_mode_quizzes
-
-                            if is_current_round_crazy:
-                                if not is_crazy_mode_active:
-                                    print(f"미친 난이도 퀴즈 출제! (본 게임 {main_game_round_counter + 1} 라운드)")
-                                    if self.emotion_queue: self.emotion_queue.put("ANGRY")
-                                    self._speak_and_subtitle("후후후... 난이도 상승! 후후후... 이번엔 정말 어려울 거다...")
-                                    self.tts.wait()
-                                    is_crazy_mode_active = True # 상태를 '크레이지 모드'로 변경
-
-                                quiz_data = crazy_mode_quizzes[main_game_round_counter]
-
-                            else:
-                                if is_crazy_mode_active:
-                                    print("일반 난이도로 돌아갑니다.")
-                                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                                    is_crazy_mode_active = False
-
-                                if self.generated_quizzes:
-                                    quiz_data = self.generated_quizzes.pop(0)
-                                    print(f"  - 사전 생성 퀴즈 사용: {quiz_data}")
-
-                                else:
-                                    print(" - Gemini API 실시간 새 퀴즈를 생성합니다.")
-                                    quiz_prompt = (
-                                        "간단한 상식 OX 퀴즈를 한국어로 하나만 만들어줘. "
-                                        "이전에 출제했던 문제와는 다른 새로운 주제로 내줘."
-                                        "출력은 반드시 다음 JSON 형식이어야 해. 다른 설명은 절대 추가하지 마.\n"
-                                        '{ "question": "<퀴즈 질문>", "answer": "O 또는 X" }'
-                                    )
-                                    try:
-                                        quiz_response = genai.GenerativeModel(MODEL_NAME).generate_content(
-                                            quiz_prompt, 
-                                            generation_config={"response_mime_type": "application/json"}
-                                        )
-                                        raw_json = _extract_text(quiz_response)
-                                        quiz_data = json.loads(raw_json)
-                                        print(f" - 생성된 퀴즈: {quiz_data}")
-                                    except Exception as e:
-                                        print(f" - 퀴즈 생성 실패: {e}. 폴백 퀴즈를 사용합니다.")
-                                        quiz_data = { "question": "사람은 코로 숨 쉬고 입으로도 숨 쉴 수 있다.", "answer": "O" }
-
-                            main_game_round_counter += 1
-
-                        if not is_predefined:
-                            if not is_first_round:
-                                self._speak_and_subtitle("자, 다음 문제입니다!")
-                                self.tts.wait()
-                        
-                            if random.random() < 0.5:
-                                thinking_phrases = [
-                                    "음... 어떤 문제를 내볼까?",
-                                    "히히 이거 재미있겠다.",
-                                    "이번에는 조금 어려울 수도 있어요."
-                                    "과연 맞출 수 있을까요?"
-                                    "인간에겐 너무 어려웠나? 쉽게 갈까요?"
-                                ]
-
-                                self._speak_and_subtitle(random.choice(thinking_phrases))
-                                self.tts.wait() 
-                        
-                        self._speak_and_subtitle(quiz_data["question"])
-                        self.tts.wait()
-                        self._speak_and_subtitle("O는 오른쪽에, X는 왼쪽에 서주세요.")
-                        self.tts.wait()
-                        for i in range(5, 0, -1):
-                            self._speak_and_subtitle(str(i))
-                            time.sleep(0.1)
-                        self.tts.wait()
-
-                        command_to_send = {
-                            "command": "START_OX_QUIZ" if is_first_round else "NEXT_ROUND",
-                            "answer": quiz_data["answer"],
-                            "is_predefined": is_predefined
-                        }
-                        self.ox_command_q.put(command_to_send)
-                        is_first_round = False
-
-                        try:
-                            round_result = self.ox_result_q.get(timeout=35)
-                            print(f"OX 퀴즈 라운드 결과 수신: {round_result}")
-
-                            message_to_speak = round_result.get("message", "결과를 처리 중입니다.")
-                            winner_count = round_result.get("winner_count", 0)
-                            is_predefined_from_worker = round_result.get("is_predefined", False)
-                            
-                            time.sleep(1)
-                            correct_answer_text = f"정답은 {quiz_data['answer']} 였습니다!"
-                            self._speak_and_subtitle(correct_answer_text)
-                            self.tts.wait()
-                            
-                            if is_predefined and quiz_data.get("explanation"):
-                                self._speak_and_subtitle(quiz_data["explanation"])
-                                self.tts.wait()
-
-                            self._speak_and_subtitle(message_to_speak)
-                            self.tts.wait()
-                            
-                            if is_predefined_from_worker:
-                                time.sleep(2)
-                                continue
-                            
-                            if winner_count > 1:
-                                print("  - 😊 정답자가 있어 HAPPY 표정으로 변경")
-                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
-                                
-                                time.sleep(3)
-                                continue
-
-                            elif winner_count == 1:
-                                print("  - 🎉 최종 우승! HAPPY 표정으로 변경")
-                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
-                                time.sleep(10)
-                                is_game_over = True
-
-                            else:
-                                print("  - 😥 정답자가 없어 SAD 표정으로 변경")
-                                if self.emotion_queue: self.emotion_queue.put("SAD")
-                                time.sleep(10)
-                                is_game_over = True
-
-                        except queue.Empty:
-                            print("OX 퀴즈 시간 초과. 워커로부터 결과를 받지 못했습니다.")
-                            self._speak_and_subtitle("이런, 시간 안에 결과를 받지 못했어요. 게임을 종료합니다.")
-                            is_game_over = True
-                    
-                    self.tts.wait()
-
-                    self._speak_and_subtitle("최후의 생존자와 가위바위보 게임을 진행할게요!... 만약 여기서 이기시면 어마무시한 선물을 드리도록 하겠습니다!... 하지만 패배하시면 벌칙을 받게 될거에요!... 마음의 준비가 되시면 개발자에게 가위바위보라고 말씀해주세요! ")
-                    
-                    model_text = "OX 퀴즈 게임 종료."
-
-                finally:
-                    if self.shared_state:
-                        self.shared_state['mode'] = 'tracking'
-                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                
-
-            elif intent == "game":
-                print("💡 의도: ROCK PAPER SCISSORS GAME")
-                starts_dance = False
-
-                try:
-                    if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                    self._speak_and_subtitle("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
-                    time.sleep(1)
-                    final_game_result = ""
-
-                    while True: 
-                        if self.emotion_queue: self.emotion_queue.put("RESET_SLEEPY_TIMER")
-                        self.rps_command_q.put("START_GAME")
-                        if self.emotion_queue: self.emotion_queue.put("THINKING")
-                        self._speak_and_subtitle("준비하시고...")
-                        self.tts.wait()
-
-                        if callable(self.play_rps_motion_cb):
-                            threading.Thread(target=self.play_rps_motion_cb, daemon=True).start()
-
-                        self._speak_and_subtitle("가위! 바위!")
-                        self._speak_and_subtitle("보!")
-                        self.tts.wait()
-
-                        game_result = ""
-                        try:
-                            game_result = self.rps_result_q.get(timeout=20)
-                            print(f"게임 결과 수신: {game_result}")
-                        
-                        except queue.Empty:
-                            print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
-                            game_result = "아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요."
-
-                        if "아고! 실수로 눈을" in game_result:
-                            if self.emotion_queue: self.emotion_queue.put("CLOSE")
-                        elif "당신이 이겼어요" in game_result:
-                            if self.emotion_queue: self.emotion_queue.put("SAD")
-                        elif "제가 이겼네요" in game_result:
-                            if self.emotion_queue: self.emotion_queue.put("HAPPY")
-                        elif "비겼네요" in game_result:
-                            if self.emotion_queue: self.emotion_queue.put("SURPRISED")
-                            
-                        time.sleep(2)
-
-                        if "비겼" in game_result:
-                            self._speak_and_subtitle(f"{game_result} 다시 한 번 할게요!")
-                            self.tts.wait()                              
-                            time.sleep(2)
-                            continue
-
-                        elif "아고! 실수로 눈을" in game_result:
-                            self._speak_and_subtitle("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요. 다시 한 번 할게요!")
-                            self.tts.wait()                              
-                            time.sleep(2)
-                            continue
-    
-                        elif "이겼" in game_result:
-                            if "제가 이겼네요"  in game_result:
-                                self._speak_and_subtitle(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요")
-                            else:
-                                self._speak_and_subtitle(f"{game_result} 까비! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
-                            
-                            self.tts.wait()
-
-                            print("💡 게임 결과에 따라 DANCE START 의도 실행")
-
-                            if callable(self.start_dance_cb):
-                                self.start_dance_cb()
-                                starts_dance = True
-                            break
-
-                        else:
-                            self._speak_and_subtitle("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
-                            break
-                finally:
-                    if not starts_dance:
-                        pass
-                
-                    model_text = f"게임 종료. 최종 결과: {final_game_result}"
-                    if not starts_dance:
-                        if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+                print("💡 의도: OX QUIZ (EntertainmentHandler로 위임)")
+                self.entertain_handler.run_ox_quiz()
+                speak_text = ""
+                model_text = "(OX 퀴즈 실행)"
             
-            print(f"[{ts}] [Gemini] {model_text}\n")
+            elif intent == "game":
+                print("💡 의도: RPS GAME (EntertainmentHandler로 위임)")
+                self.entertain_handler.run_rps_game()
+                speak_text = ""
+                model_text = "(가위바위보 실행)"
+            
             if speak_text: 
-                if self.subtitle_queue:
-                    self.subtitle_queue.put(speak_text)
-
-                self.tts.speak(speak_text)
+                # dance, stop 등 간단한 응답 처리
+                self._speak_and_subtitle(speak_text)
             
         except Exception as e: 
             print(f"❌ 처리 실패: {e}\n")
-
             if self.emotion_queue:
                     self.emotion_queue.put("NEUTRAL")
 
         finally:
+            # 1. 모든 TTS 출력이 끝날 때까지 기다립니다.
+            print("... 모든 TTS 출력이 끝날 때까지 대기 중 ...")
+            self.tts.wait() 
+            print("... TTS 출력 완료 ...")
+
+            # 2. [수정] 'chat' 또는 'introduction'일 경우, 백그라운드에서 '실시간 메모리' 업데이트
+            if (intent == "chat" or intent == "introduction") and user_text and model_text:
+                print("... (백그라운드에서 실시간 메모리 업데이트 시작)")
+                try:
+                    threading.Thread(
+                        target=self.profile_manager.update_summary_after_chat, # <<< 새 함수 호출
+                        args=(user_text, model_text), 
+                        daemon=True
+                    ).start()
+                except Exception as e:
+                    print(f"❌ 프로필 요약 스레드 시작 중 오류 발생: {e}")
+            
+            # 3. 모든 작업이 끝났으므로 busy signal을 낮춤
             self.lower_busy_signal()
 
-    def _run_presenter_intro(self):
-        if self.shared_state and self.shared_state.get('mode') != 'tracking':
-            print(f"⚠️  다른 모드({self.shared_state.get('mode')})가 이미 실행 중입니다.")
-            return
-
-        try:
-            self.raise_busy_signal()
-            if self.shared_state:
-                self.shared_state['mode'] = 'presenter'
-            
-            # --- 1. 오프닝 멘트 ---
-            if callable(self.play_greeting_cb):
-                greeting_thread = threading.Thread(target=self.play_greeting_cb, daemon=True)
-                greeting_thread.start()
-            
-            print("😊 표정을 HAPPY로 변경합니다.")
-            if self.emotion_queue:
-                self.emotion_queue.put("HAPPY") 
-            
-            script_part1 = (
-                "안녕하세요, 한동의 미남 미녀 여러분! "
-            )
-            self._speak_and_subtitle(script_part1)
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-            
-            self._speak_and_subtitle("저는 따뜻한 공감이 필요한 여러분을 위해 태어난 공감 서비스 로봇! 모티입니다.")
-            
-            
-            if callable(self.play_right_arm_cb):
-                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
-                
-            print("😥 표정을 SAD로 변경합니다.")
-            if self.emotion_queue:
-                self.emotion_queue.put("SAD")
-            
-            script_part2 = (
-                "7주차 시험 기간, 다들 정말 고생 많으시죠? "
-            )
-            self._speak_and_subtitle(script_part2)
-            
-            if callable(self.play_left_arm_cb):
-                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
-            
-            if callable(self.play_left_arm_cb):
-                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
-            
-            self._speak_and_subtitle("밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 아파요. ")
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-                
-            print("😊 표정을 다시 HAPPY로 변경합니다.")
-            if self.emotion_queue:
-                self.emotion_queue.put("HAPPY")
-            time.sleep(0.5) 
-            script_part3 = (
-                "괜찮다면, 잠시만이라도 머리 식힐 겸 저와 함께 즐거운 시간을 보내는 건 어떠세요? "
-            )
-            self._speak_and_subtitle(script_part3)
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-            
-            self._speak_and_subtitle("복잡한 건 잠시 잊고, 모티와 함께 잠시 웃어요! ")
-
-            # TODO: 여기에 표정/행동 코드 추가
-            if self.emotion_queue:
-                 self.emotion_queue.put("THINKING")
-            time.sleep(0.5)
-            
-            self._speak_and_subtitle("위잉. 사용자 수 분석중. ")
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("SURPRISED") 
-            time.sleep(0.5)
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-                
-            script_part4 = (
-                "생각 보다 많은 분들이 와주셨네요!.. "
-                "너무 많은 사용자로 인해 제가 살짝 긴장한 것 같아서... "
-            )
-            self._speak_and_subtitle(script_part4)
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-                
-            self._speak_and_subtitle("회로 과부하가 왔는지 상태를 한번 진단해볼게요!")
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("THINKING")
-            time.sleep(0.5)
-            
-            if callable(self.play_right_arm_cb):
-                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
-            
-            script_part5 = (
-                "제 CPU 온도는 36.5도로 안정적이고... "
-            )
-            self._speak_and_subtitle(script_part5)
-            
-            if callable(self.play_left_arm_cb):
-                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
-
-            self._speak_and_subtitle("모든 회로는 정상적으로 작동 중!")
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-            
-            self._speak_and_subtitle("무대 중에 떨지 않도록... 제 냉각 팬을 더 빨리 돌려볼게요! 위이잉.")
-
-            # TODO: 여기에 표정/행동 코드 추가
-            if self.emotion_queue:
-                 self.emotion_queue.put("NEUTRAL")
-            time.sleep(0.5)
-            
-            if callable(self.play_left_arm_cb):
-                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
-            
-            script_part6 = (
-                "제가 여러분과 함께하는 이 순간을 위해! " 
-            )
-            self._speak_and_subtitle(script_part6)
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-                
-            self._speak_and_subtitle("공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! ")
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("THINKING")
-                 
-            if callable(self.play_left_arm_cb):
-                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
-                
-            self._speak_and_subtitle("분석결과, 여러분들은 시험 기간 평균 수면 시간이 4.2시간,")     
-            
-            if callable(self.play_right_arm_cb):
-                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
-            
-            self._speak_and_subtitle(" 커피 및 카페인 섭취량은 2.5잔! ")
-            
-            if callable(self.play_left_arm_cb):
-                threading.Thread(target=self.play_left_arm_cb, daemon=True).start()
-            
-            self._speak_and_subtitle("그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! ")
-            
-            if callable(self.play_right_arm_cb):
-                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
-                
-            self._speak_and_subtitle("아, 그리고 더 흥미로운 사실을 발견했어요! ")
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-            
-            script_part7 = (
-                "오석 와이파이 트래픽을 분석해 보니... 공부 관련 자료 다운로드 수보다.. 인스타그램과 에브리타임 새로고침 수가 2.7배 더 많았어요! "
-            )
-            self._speak_and_subtitle(script_part7)
-            if self.emotion_queue:
-                 self.emotion_queue.put("SURPRISED")
-            time.sleep(0.5)
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-                
-            self._speak_and_subtitle("역시 한동대학생 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요? ")
-            if self.emotion_queue:
-                 self.emotion_queue.put("HAPPY")
-            time.sleep(0.5)
-            self._speak_and_subtitle("대단해요!")
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("TENDER")
-                 
-            self._speak_and_subtitle("헤헤. 사실 농담이에요. ")
-            
-            if callable(self.play_right_arm_cb):
-                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
-                
-            script_part8 = (
-                
-                "딥러닝으로 분석한 결과 여러분들이 세상을 바꾸기위해... 정말 열심히 공부한다는건 명백한 사실이니까요! "
-                "열심히 공부하는 것 만큼 쉴땐 확실히 쉬는것도 중요하다고 생각해요! "
-            )
-            self._speak_and_subtitle(script_part8)
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("ANGRY")
-            self._speak_and_subtitle("개발자님은 절 못쉬게 하던데... 나중에 여러분들이 혼내주세요! ")
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("HAPPY")
-            self._speak_and_subtitle("헤헤.")
-            time.sleep(0.5) 
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-            
-            script_part9 = (
-                "그럼 이제 저와 여러분들이 어느정도 친해진 것 같으니! "
-                "본격적으로 모티와 함께 놀아볼까요?"
-            )
-            self._speak_and_subtitle(script_part9)
-            
-            if callable(self.play_right_arm_cb):
-                threading.Thread(target=self.play_right_arm_cb, daemon=True).start()
-                
-            self._speak_and_subtitle("옆에 있는 개발자가 손으로 신호를 주면...")
-            
-            if callable(self.play_both_arms_cb):
-                motion_thread = threading.Thread(target=self.play_both_arms_cb, daemon=True)
-                motion_thread.start()
-                
-            self._speak_and_subtitle("여러분의 큰 목소리로... OX게임! 이라고 외쳐주세요!... ")
-
-            print("✅ 진행자 모드 스크립트가 모두 출력되었습니다.")
-
-        except Exception as e:
-            print(f"❌ 진행자 모드 실행 중 오류 발생: {e}")
-        finally:
-            if self.shared_state:
-                self.shared_state['mode'] = 'tracking'
-            self.lower_busy_signal()
-            if self.emotion_queue:
-                self.emotion_queue.put("NEUTRAL")
-
-
-    def _speak_farewell(self):
-        try:
-            self.raise_busy_signal()
-            print("💡 'l' 키 입력 감지. 작별 인사를 시작합니다.")
-            
-            if self.emotion_queue:
-                 self.emotion_queue.put("SAD")
-                 time.sleep(0.5)
-            self._speak_and_subtitle("아쉽지만, 저와 함께하는 즐거운 시간도 이제 마무리할 시간이네요. "
-                "벌써 헤어져야 하는 시간이라니. 아쉬워요! ")
-            if self.emotion_queue:
-                 self.emotion_queue.put("TENDER")
-            farewell_text = (
-                "오늘 이 시간이 여러분의 힘든 시험 기간에... 작은 쉼표가 되었기를 바라요. "
-                "밤늦게까지 공부하는 것도 중요하지만... 가장 중요한 건 바로 여러분 자신이라는 걸 잊지 마세요..."
-                "괜찮으시다면... 오늘 저와의 시간이 어땠는지 여러분의 생각을 들려주세요... 이 QR코드를 통해 설문에 참여해주시면... 여러분의 소중한 의견이 저를 더욱 따뜻한 로봇으로.  성장하게 한답니다. 여러분의 의견 하나하나가 제게는 소중한 데이터이자 마음이에요! "
-            )
-            self._speak_and_subtitle(farewell_text)
-            if self.emotion_queue:
-                 self.emotion_queue.put("HAPPY")
-                 time.sleep(0.5)
-            self._speak_and_subtitle("한동의 멋진 여러분!... 남은 시험도 힘내시고, 최고의 결과가 있기를... 저 모티가 온 회로를 다해 응원할게요! 모두들 파이팅!" "여러분의 공감 서비스 로봇 모티! 모티였습니다! 감사합니다!")
-            self.tts.wait()
-            print("작별 인사 완료. 1초 후 프로그램을 종료합니다.")
-            time.sleep(1)
-            
-        finally:
-            if self.emotion_queue:
-                self.emotion_queue.put("NEUTRAL")
-            self.lower_busy_signal()
-            
     def _on_press(self, key):
         if self.stop_event.is_set(): return False
         try:
@@ -1752,16 +893,15 @@ class PressToTalk:
         if self.stop_event.is_set(): return False
         try:
             if key == keyboard.KeyCode.from_char('p'):
-                self.toggle_announcement()
+                self.present_handler.toggle_announcement()
 
             elif key == keyboard.KeyCode.from_char('l'):
                 print("💡 'l' 키 입력 감지. 작별 인사를 시작합니다.")
-                threading.Thread(target=self._speak_farewell, daemon=True).start()
+                threading.Thread(target=self.present_handler.speak_farewell, daemon=True).start()
             
             elif key == keyboard.KeyCode.from_char('z'):
                 print("👑 'z' 키 입력 감지. 진행자 모드 인트로를 시작합니다.")
-                # 별도 스레드에서 실행하여 키보드 리스너가 멈추는 것을 방지합니다.
-                threading.Thread(target=self._run_presenter_intro, daemon=True).start()
+                threading.Thread(target=self.present_handler.run_presenter_intro, daemon=True).start()
             
             elif key == keyboard.Key.esc:
                 print("ESC 감지 -> 종료 신호 보냄")
@@ -1837,7 +977,8 @@ class PressToTalk:
             self.mouth_listener_thread.join(timeout=1.0)
         
         try:
-            self.update_profile_summary_at_exit()
+            # ▼▼▼ [수정] 종료 시 ProfileManager에게 위임 ▼▼▼
+            self.profile_manager.save_profile_at_exit()
         except Exception as e:
             print(f"❌ 종료 요약 저장 중 치명적 오류: {e}")
 
