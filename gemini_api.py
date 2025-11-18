@@ -30,7 +30,7 @@ import platform
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Callable
 import multiprocessing
 from functools import wraps
@@ -507,7 +507,8 @@ class PressToTalk:
         print(f"⏳ {name}님의 프로필 로드를 시도합니다...")
         
         chat_summary = "아직 기록된 내용이 없습니다."
-        
+        last_seen_str = "기록 없음"
+
         try:
             if os.path.exists(self.profile_db_file):
                 with open(self.profile_db_file, "r", encoding="utf-8") as f:
@@ -515,9 +516,18 @@ class PressToTalk:
             else:
                 data = {}
 
-            if name in data and "chat_summary" in data[name]:
-                chat_summary = data[name]["chat_summary"]
-                print(f"✅ {name}님의 프로필을 성공적으로 로드했습니다.")
+            if name in data: # ▼▼▼ [수정] last_seen도 함께 로드 ▼▼▼
+                chat_summary = data[name].get("chat_summary", "아직 기록된 내용이 없습니다.")
+                last_seen_iso = data[name].get("last_seen")
+                
+                if last_seen_iso:
+                    try:
+                        last_seen_dt = datetime.fromisoformat(last_seen_iso)
+                        last_seen_str = last_seen_dt.strftime('%Y년 %m월 %d일 %H시 %M분')
+                    except ValueError:
+                        pass # 파싱 실패 시 "기록 없음" 유지
+                
+                print(f"✅ {name}님의 프로필을 성공적으로 로드했습니다. (마지막 대화: {last_seen_str})")
                 self._speak_and_subtitle(f"{name}님, 다시 만나서 반가워요!")
             
             else:
@@ -529,13 +539,20 @@ class PressToTalk:
             self._speak_and_subtitle(f"{name}님, 만나서 반가워요!")
 
         self.current_user_name = name
+        current_time_str = datetime.now().strftime('%Y년 %m월 %d일 %A')
 
         enhanced_system_instruction = (
             SYSTEM_INSTRUCTION +
-            "\n\n--- 중요 기억 ---\n"
+            f"\n\n--- 현재 시간 ---\n"
+            f"오늘은 {current_time_str}입니다. 이 시간 정보를 바탕으로 '어제', '오늘' 등을 정확히 인지하세요."
+            "\n\n--- 중요 기억 (필독!) ---\n"
             f"당신은 지금 '{name}'님과 대화하고 있습니다.\n"
-            f"다음은 '{name}'님에 대해 당신이 기억하고 있는 중요한 사실들입니다:\n"
+            f"다음은 '{name}'님에 대해 당신이 기억하고 있는 중요한 사실들입니다 ( {last_seen_str} 기준):\n"
             f"{chat_summary}\n"
+            "--- 중요 기억 활용 규칙 ---\n"
+            "1. 사용자의 질문에 답하기 전, 항상 [중요 기억] 섹션에 관련 정보가 있는지 먼저 확인하세요.\n"
+            f"2. (예시) 사용자가 '오늘 뭐할까?'라고 물었고, [중요 기억]에 '- {current_time_str.split(' ')[0]} 5시까지 공부할 예정'이라고 적혀있다면, '기억하기로는 오늘 5시까지 공부하실 계획이 있으셨어요.'라고 먼저 알려주세요.\n"
+            "3. [중요 기억]의 내용을 대화에 적극적으로 활용하여, 당신이 사용자를 기억하고 있음을 보여주세요.\n"
             "--- 중요 기억 끝 ---"
         )
         
@@ -557,6 +574,8 @@ class PressToTalk:
         try:
             data = {}
             old_summary = "아직 기록된 내용이 없습니다."
+            last_seen_str = "기록 없음"
+
             if os.path.exists(self.profile_db_file):
                 with open(self.profile_db_file, "r", encoding="utf-8") as f:
                     try: data = json.load(f)
@@ -564,20 +583,43 @@ class PressToTalk:
             
             if self.current_user_name in data:
                 old_summary = data[self.current_user_name].get("chat_summary", old_summary)
+                last_seen_iso = data[self.current_user_name].get("last_seen")
+
+                if last_seen_iso:
+                    try:
+                        last_seen_dt = datetime.fromisoformat(last_seen_iso)
+                        last_seen_str = last_seen_dt.strftime('%Y년 %m월 %d일 %H시 %M분')
+                    except ValueError:
+                        last_seen_str = f"(알 수 없는 시간: {last_seen_iso})"
+                        
+            current_time_dt = datetime.now()
+            one_week_ago_dt = current_time_dt - timedelta(days=7) # 1주일 전 날짜 계산
+            
+            current_time_str = current_time_dt.strftime('%Y년 %m월 %d일 %H시 %M분')
+            current_date_str_for_chat = current_time_dt.strftime('%Y년 %m월 %d일 %A')
+            one_week_ago_str = one_week_ago_dt.strftime('%Y년 %m월 %d일') # 1주일 전 날짜 (삭제 기준)
 
             summarizer_prompt = (
-                "당신은 대화 내용을 바탕으로 사용자의 프로필을 관리하는 AI입니다.\n"
-                f"아래의 [기존 사실]을 [방금 나눈 대화]의 내용으로 업데이트하여, [새로운 사실 목록]을 만드세요.\n\n"
+                f"당신은 대화 내용을 바탕으로 사용자의 프로필을 관리하는 AI입니다.\n"
+                f"현재 시간은 [ {current_time_str} ]입니다.\n"
+                f"!! 삭제 기준일은 [ {one_week_ago_str} ]입니다. (오늘로부터 1주일 전)\n" # <-- 1주일 전 날짜 제공
+                f"아래의 [기존 사실] ( {last_seen_str} 기준)을 [방금 나눈 대화] ( {current_time_str} 발생)의 내용으로 업데이트하여, [새로운 사실 목록]을 만드세요.\n\n"
                 "규칙:\n"
-                "1. 대화에서 '사용자'에 대한 '중요한 개인 정보'(이름, 좋아하는 것, 싫어하는 것, 직업, 가족, 애완동물, 최근의 큰 감정 등)만 추출합니다.\n"
+                "1. 대화에서 '사용자'에 대한 '중요한 개인 정보'(이름, 별명, 생일, 연령, 거주지/지역, 선호 언어, 직업/직무, 직장/학교, 전공, 취미, 좋아하는 음식/요리, 식단 제한/알레르기, 건강 목표, 수면 습관, 대화/응답 스타일, 선호 콘텐츠, 최근 감정, 가족/애완동물 정보, 특별한 날짜, 추억 등)만 추출합니다.\n"
                 "2. 단순한 인사나 잡담('안녕', '고마워', '춤 춰')은 무시합니다.\n"
                 "3. '새로운 사실 목록'은 항상 간결한 불렛 포인트(-)로 작성합니다.\n"
-                "4. [방금 나눈 대화]에서 추출할 새 사실이 없다면, [기존 사실]을 그대로 출력합니다.\n\n"
-                f"[기존 사실]\n{old_summary}\n\n"
-                f"[방금 나눈 대화]\n"
+                "4. [방금 나눈 대화]에서 추출할 새 사실이 없다면, [기존 사실]을 그대로 출력합니다.\n"
+                "5. [!!기억 삭제 규칙!!] [기존 사실] 목록을 검토하여, [ {one_week_ago_str} ]보다 날짜가 오래된 (즉, 1주일이 지난) 사실은 [새로운 사실 목록]에서 삭제하세요.\n"
+                "   - (예시) [기존 사실]에 '- 2025년 11월 1일 강아지 입양'이라고 적혀있고, 삭제 기준일이 '2025년 11월 10일'이라면, 이 사실은 삭제합니다.\n"
+                "   - (예외) 단, 사용자의 이름, 생일, MBTI, 가족/반려동물 이름 등 *절대 변하지 않는 핵심 개인정보*는 1주일이 지났더라도 삭제하지 말고 유지해야 합니다.\n"
+                "6. [!!날짜 저장 규칙!!] 요약 목록을 작성할 때, '오늘', '내일' 같은 상대적인 시간 표현을 절대 사용하지 마세요.\n"
+                "   - 대신 [현재 시간]({current_time_str})을 기준으로, 'YYYY년 MM월 DD일' 형태의 [절대 날짜]로 변환해서 기록하세요.\n"
+                "   - (예시) [방금 나눈 대화]에서 사용자가 '오늘 5시 공부'라고 말했다면, 요약 목록에 '- {current_time_str.split(' ')[0]} 5시까지 공부할 예정'이라고 저장하세요.\n\n"
+                f"[기존 사실 ( {last_seen_str} 기준)]\n{old_summary}\n\n"
+                f"[방금 나눈 대화 ( {current_time_str} 에 발생)]\n"
                 f"사용자: {user_text}\n"
                 f"모티(AI): {ai_response}\n\n"
-                "[새로운 사실 목록]\n"
+                "[새로운 사실 목록] (1주일 이내의 정보 + 핵심 정보만 포함)\n"
             )
 
             summarizer_model = genai.GenerativeModel(MODEL_NAME)
@@ -596,16 +638,22 @@ class PressToTalk:
             current_history = self.chat.history
             enhanced_system_instruction = (
                 SYSTEM_INSTRUCTION +
-                "\n\n--- 중요 기억 ---\n"
+                f"\n\n--- 현재 시간 ---\n"
+                f"오늘은 {current_date_str_for_chat}입니다. 이 시간 정보를 바탕으로 '어제', '오늘' 등을 정확히 인지하세요."
+                "\n\n--- 중요 기억 (필독!) ---\n"
                 f"당신은 지금 '{self.current_user_name}'님과 대화하고 있습니다.\n"
-                f"다음은 '{self.current_user_name}'님에 대해 당신이 기억하고 있는 중요한 사실들입니다:\n"
+                f"다음은 '{self.current_user_name}'님에 대해 당신이 기억하고 있는 중요한 사실들입니다 ( {current_time_str} 기준):\n"
                 f"{new_summary}\n"
+                "--- 중요 기억 활용 규칙 ---\n"
+                "1. 사용자의 질문에 답하기 전, 항상 [중요 기억] 섹션에 관련 정보가 있는지 먼저 확인하세요.\n"
+                f"2. (예시) 사용자가 '오늘 뭐할까?'라고 물었고, [중요 기억]에 '- {current_date_str_for_chat.split(' ')[0]} 5시까지 공부할 예정'이라고 적혀있다면, '기억하기로는 오늘 5시까지 공부하실 계획이 있으셨어요.'라고 먼저 알려주세요.\n"
+                "3. [중요 기억]의 내용을 대화에 적극적으로 활용하여, 당신이 사용자를 기억하고 있음을 보여주세요.\n"
                 "--- 중요 기억 끝 ---"
             )
             self.chat = genai.GenerativeModel(
                 MODEL_NAME, 
                 system_instruction=enhanced_system_instruction
-            ).start_chat(history=current_history) # 새 프롬프트 + 기존 대화 기록 = 완벽한 연속성
+            ).start_chat(history=current_history)
 
             print(f"✅ {self.current_user_name}님의 프로필 요약을 업데이트했습니다.")
 
@@ -809,7 +857,7 @@ class PressToTalk:
         if self.state.recording: return
         if self.emotion_queue:
             self.emotion_queue.put("RESET_SLEEPY_TIMER")
-            self.emotion_queue.put("THINKING")
+            self.emotion_queue.put("LISTENING")
 
         self.last_activity_time = time.time()
         print("✅ User started speaking. Activity timer reset.")
@@ -833,7 +881,7 @@ class PressToTalk:
         self.state.stream = sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype=DTYPE, callback=self._audio_callback, blocksize=0, device=device_idx)
         self.state.stream.start()
         self.state.recording = True
-        print("🎙️  녹음 시작 (스페이스바 유지 중)...")
+        print("🎙️  녹음 시작...")
         
         if callable(self.perform_head_nod_cb) and (self.nodding_thread is None or not self.nodding_thread.is_alive()):
             self.stop_nodding_event.clear()
@@ -843,7 +891,7 @@ class PressToTalk:
     def _stop_recording_and_transcribe(self):
         if not self.state.recording: return
         if self.emotion_queue:
-            self.emotion_queue.put("NEUTRAL")
+            self.emotion_queue.put("THINKING")
         self.last_activity_time = time.time()
         print("✅ User stopped speaking. Activity timer reset.")
         print("⏹️  녹음 종료, 전사 중...")
@@ -904,26 +952,49 @@ class PressToTalk:
         intent = None
         user_text = ""
         model_text = ""
+        is_chat_intent = False
+        self.raise_busy_signal()
+        
         try:
             b64 = base64.b64encode(wav_bytes).decode("ascii")
             parts = [{"text": PROMPT_TEXT}, {"inline_data": {"mime_type": "audio/wav", "data": b64}}]
             resp = self.model.generate_content(parts)
             user_text = _extract_text(resp)
-            if not user_text: print("📝 전사 결과가 비어 있습니다.\n"); return
+            if not user_text: 
+                print("📝 전사 결과가 비어 있습니다.\n")
+
+                if self.emotion_queue:
+                    self.emotion_queue.put("NEUTRAL")
+
+                self.lower_busy_signal()
+                return
+            
             ts = datetime.now().strftime("%H:%M:%S"); print(f"[{ts}] [User ] {user_text}")
 
             route = self._route_intent(user_text)
             intent = route.get("intent", "chat")
 
-            if intent == "introduction":
-                name = route.get("name") # AI가 추출한 이름
+            if self.emotion_queue and intent not in ("dance", "game", "ox_quiz"):
+                self.emotion_queue.put("NEUTRAL") 
+                print("😊 THINKING 종료: NEUTRAL로 즉시 전환")
+
+            if intent == "chat":
+                is_chat_intent = True
+
+            elif intent == "introduction":
+                name = route.get("name")
                 if name:
                     print(f"💡 의도: INTRODUCTION, AI가 추출한 이름: {name}")
-                    self.load_profile(name) # AI가 추출한 이름으로 프로필 로드
+                    self.load_profile(name)
                 else:
-                    # AI가 이름 소개 문장이라고는 판단했으나, 정작 이름을 못 찾은 경우
                     print("⚠️  의도: INTRODUCTION (이름 추출 실패). Chat으로 폴백.")
-                    intent = "chat" # 일반 채팅으로 처리
+                    intent = "chat"
+                    is_chat_intent = True
+
+            if not is_chat_intent: # 폴백되어 chat으로 가지 않은, 순수 introduction일 때
+                    if self.emotion_queue:
+                        print("... Introduction 완료, NEUTRAL로 표정 리셋 ...")
+                        self.emotion_queue.put("NEUTRAL")
 
             model_text, speak_text = "", ""
 
@@ -933,19 +1004,20 @@ class PressToTalk:
                 self._analyze_and_send_emotion(model_text) 
 
                 print(f"[{ts}] [Gemini] {model_text}\n")
+
                 if speak_text:
                     self._speak_and_subtitle(speak_text)
 
                 if self.emotion_queue:
                     print("... TTS 완료, NEUTRAL로 표정 리셋 ...")
                     self.emotion_queue.put("NEUTRAL")
+
                 speak_text = ""
 
             elif intent == "dance":
                 print("💡 의도: DANCE START")
                 if callable(self.start_dance_cb):
                     try: 
-                        self.raise_busy_signal() 
                         self.start_dance_cb()
                     except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
                 
@@ -960,7 +1032,6 @@ class PressToTalk:
                 if callable(self.stop_dance_cb):
                     try: 
                         self.stop_dance_cb()
-                        self.lower_busy_signal() 
                     except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
                 
                 if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
@@ -969,7 +1040,6 @@ class PressToTalk:
             elif intent == "joke":
                 print("💡 의도: JOKE (AI 실시간 생성 방식)")
                 try:
-                    self.raise_busy_signal()
                     if self.emotion_queue: self.emotion_queue.put("THINKING")
                     self._speak_and_subtitle("위잉 회로 풀가동! 여러분의 모터가 빠질만한 개그를 생성하는 중입니다")
                     self.tts.wait()
@@ -1023,7 +1093,9 @@ class PressToTalk:
                     speak_text = ""
 
                 finally:
-                    self.lower_busy_signal()
+                    if self.emotion_queue:
+                        self.emotion_queue.put("NEUTRAL")
+                    pass
 
             elif intent == "ox_quiz":
                 print("💡 의도: OX QUIZ GAME (라운드 방식)")
@@ -1073,7 +1145,6 @@ class PressToTalk:
                 is_crazy_mode_active = False 
 
                 try:
-                    self.raise_busy_signal()
                     self.shared_state['mode'] = 'ox_quiz'
                     self._speak_and_subtitle("그럼 지금부터 여러분과 OX 퀴즈 게임을 시작하겠습니다!")
                     self.tts.wait()
@@ -1254,7 +1325,6 @@ class PressToTalk:
                 finally:
                     if self.shared_state:
                         self.shared_state['mode'] = 'tracking'
-                    self.lower_busy_signal()
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
                 
 
@@ -1263,7 +1333,6 @@ class PressToTalk:
                 starts_dance = False
 
                 try:
-                    self.raise_busy_signal() 
                     if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
                     self._speak_and_subtitle("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
                     time.sleep(1)
@@ -1335,7 +1404,7 @@ class PressToTalk:
                             break
                 finally:
                     if not starts_dance:
-                        self.lower_busy_signal()
+                        pass
                 
                     model_text = f"게임 종료. 최종 결과: {final_game_result}"
                     if not starts_dance:
@@ -1348,14 +1417,21 @@ class PressToTalk:
 
                 self.tts.speak(speak_text)
             
-        except Exception as e: print(f"❌ 처리 실패: {e}\n")
+        except Exception as e: 
+            print(f"❌ 처리 실패: {e}\n")
+
+            if self.emotion_queue:
+                    self.emotion_queue.put("NEUTRAL")
 
         finally:
-            # 채팅/농담 후 '요약 저장' 함수 호출
-            if self.current_user_name:
-                if intent == "chat" or intent == "joke" or intent == "introduction":
-                    # user_text와 model_text를 전달하여 요약 업데이트
+            # intent가 'chat'이었고, 사용자 텍스트와 모델 텍스트가 모두 존재할 때만 요약 저장
+            if intent == "chat" and user_text and model_text:
+                try:
                     self.update_profile_summary(user_text, model_text)
+                except Exception as e:
+                    print(f"❌ 프로필 요약 저장 중 오류 발생: {e}")
+        
+            self.lower_busy_signal()
 
     def _run_presenter_intro(self):
         if self.shared_state and self.shared_state.get('mode') != 'tracking':
