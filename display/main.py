@@ -36,6 +36,7 @@ from .emotions.scared import Emotion as ScaredEmotion
 from .emotions.angry import Emotion as AngryEmotion
 from .emotions.sad import Emotion as SadEmotion
 from .emotions.surprised import Emotion as SurprisedEmotion
+from .emotions.listening import Emotion as ListeningEmotion
 from .emotions.thinking import Emotion as ThinkingEmotion
 from .emotions.sleepy import Emotion as SleepyEmotion
 from .emotions.wake import Emotion as WakeEmotion
@@ -47,9 +48,10 @@ from dotenv import load_dotenv
 from .hotword import HotwordDetector
 
 load_dotenv(dotenv_path='./.env.local')
+faceColor = (0, 0, 0)
 
 class RobotFaceApp:
-    # ▼▼▼ 1. __init__ 메서드에 ptt_thread 인자 추가 ▼▼▼
+    # __init__ 메서드에 ptt_thread 인자 추가
     def __init__(self, emotion_queue=None, hotword_queue=None, stop_event=None, sleepy_event=None, ptt_thread=None):
         pygame.init()
 
@@ -104,13 +106,14 @@ class RobotFaceApp:
         self.emotions = {
             "NEUTRAL": NeutralEmotion(), "HAPPY": HappyEmotion(), "EXCITED": ExcitedEmotion(),
             "TENDER": TenderEmotion(), "SCARED": ScaredEmotion(), "ANGRY": AngryEmotion(), 
-            "SAD": SadEmotion(), "SURPRISED": SurprisedEmotion(), "THINKING": ThinkingEmotion(), 
-            "SLEEPY": SleepyEmotion(), "WAKE": WakeEmotion(), "CLOSE": CloseEmotion()
+            "SAD": SadEmotion(), "SURPRISED": SurprisedEmotion(), "LISTENING": ListeningEmotion(),
+            "THINKING": ThinkingEmotion(), "SLEEPY": SleepyEmotion(), "WAKE": WakeEmotion(), 
+            "CLOSE": CloseEmotion()
         }
         self.current_emotion_key = "NEUTRAL"
 
         self.eyebrow_drawers = {
-            "ANGRY": eyebrow.draw_angry_eyebrows, "SAD": eyebrow.draw_sad_eyebrows, "THINKING": eyebrow.draw_thinking_eyebrows,
+            "ANGRY": eyebrow.draw_angry_eyebrows, "SAD": eyebrow.draw_sad_eyebrows, "THINKING": eyebrow.draw_thinking_eyebrows, "LISTENING": eyebrow.draw_thinking_eyebrows,
         }
         self.cheek_drawers = {
             "HAPPY": cheeks.draw_happy_cheeks, "TENDER": cheeks.draw_tender_cheeks,
@@ -168,7 +171,9 @@ class RobotFaceApp:
                     self.click_timer = current_time
                 else: self.click_count = 0
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1: self.is_mouse_down = False
-            if event.type == pygame.USEREVENT + 1: self.target_offset = self.get_random_target_offset()
+            if event.type == pygame.USEREVENT + 1: 
+                if self.current_emotion_key not in ["LISTENING"]:
+                    self.target_offset = self.get_random_target_offset()
             if event.type == pygame.USEREVENT + 2 and not self.is_blinking:
                 self.is_blinking = True
                 self.blink_progress = 0
@@ -214,33 +219,44 @@ class RobotFaceApp:
             if pygame.time.get_ticks() - self.emotion_timer_start_time >= 30000:
                 self.change_emotion("NEUTRAL")
 
-        dx, dy = self.target_offset[0] - self.common_data['offset'][0], self.target_offset[1] - self.common_data['offset'][1]
-        dist = math.hypot(dx, dy)
-        if dist > self.move_speed:
-            self.common_data['offset'][0] += (dx / dist) * self.move_speed
-            self.common_data['offset'][1] += (dy / dist) * self.move_speed
+        if self.current_emotion_key in ["LISTENING"]:
+            self.target_offset = [0.0, 0.0]
+            self.common_data['offset'] = [0.0, 0.0]
+        
+        else:
+            dx, dy = self.target_offset[0] - self.common_data['offset'][0], self.target_offset[1] - self.common_data['offset'][1]
+            dist = math.hypot(dx, dy)
+            if dist > self.move_speed:
+                self.common_data['offset'][0] += (dx / dist) * self.move_speed
+                self.common_data['offset'][1] += (dy / dist) * self.move_speed
+        
         if self.is_blinking:
             self.blink_progress += self.normal_blink_speed
             if self.blink_progress >= 200: self.is_blinking = False
+
         self.common_data['time'] = pygame.time.get_ticks()
         return True
 
     def draw(self):
         self.screen.fill((0, 0, 0))
-        self.base_surface.fill((0, 0, 0))
+        self.base_surface.fill(faceColor)
         current_emotion = self.emotions[self.current_emotion_key]
         current_emotion.draw(self.base_surface, self.common_data)
+
         if self.is_blinking and self.current_emotion_key != "SLEEPY":
             progress = self.blink_progress if self.blink_progress <= 100 else 200 - self.blink_progress
             for eye_center in [self.common_data['left_eye'], self.common_data['right_eye']]:
                 top_rect = (eye_center[0]-100, eye_center[1]-150, 200, progress+50)
                 bottom_rect = (eye_center[0]-100, eye_center[1]+100-progress, 200, progress+50)
-                pygame.draw.rect(self.base_surface, (0,0,0), top_rect)
-                pygame.draw.rect(self.base_surface, (0,0,0), bottom_rect)
+                pygame.draw.rect(self.base_surface, faceColor, top_rect)
+                pygame.draw.rect(self.base_surface, faceColor, bottom_rect)
+
         if self.current_emotion_key in self.eyebrow_drawers:
             self.eyebrow_drawers[self.current_emotion_key](self.base_surface, self.common_data)
+            
         if self.current_emotion_key in self.cheek_drawers:
             self.cheek_drawers[self.current_emotion_key](self.base_surface, self.common_data)
+
         scaled_surface = pygame.transform.scale(self.base_surface, (self.scaled_width, self.scaled_height))
         self.screen.blit(scaled_surface, (0, 0))
         pygame.display.flip()
@@ -271,7 +287,7 @@ class RobotFaceApp:
         
         print("Face App 종료 절차 시작...")
         
-        # ▼▼▼ 2. pygame.quit() 호출 전에 이 코드를 추가 ▼▼▼
+        # pygame.quit() 호출 전에 이 코드를 추가
         # PTT 스레드가 살아있다면, 작별 인사를 마칠 때까지 여기서 기다립니다.
         if self.ptt_thread and self.ptt_thread.is_alive():
             print("   - 작별 인사가 끝날 때까지 화면을 유지합니다...")
@@ -281,7 +297,7 @@ class RobotFaceApp:
         pygame.quit() # PTT 스레드가 종료된 후에야 화면을 끔
         print("Face App 정상 종료")
 
-# ▼▼▼ 3. run_face_app 함수 정의에 ptt_thread 인자 추가 ▼▼▼
+# run_face_app 함수 정의에 ptt_thread 인자 추가
 def run_face_app(emotion_q, hotword_q, stop_event, sleepy_event: threading.Event, ptt_thread: threading.Thread):
     try:
         app = RobotFaceApp(
