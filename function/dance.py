@@ -561,7 +561,8 @@ def stop_dance(port: PortHandler, pkt: PacketHandler, lock, return_home: bool = 
 
 def start_new_dance(port: PortHandler, pkt: PacketHandler, lock: threading.Lock, shared_state: dict, home_pan: int, home_tilt: int, emotion_queue):
     threading.Thread(target=_new_dance_routine, args=(port, pkt, lock, shared_state, home_pan, home_tilt, emotion_queue), daemon=True).start()
-    
+    return PLAY_DURATION
+
 def play_greeting_motion(port: PortHandler, pkt: PacketHandler, lock):
     """
     (수정) 부드러운 가속도를 적용하여 인사하는 동작을 수행합니다.
