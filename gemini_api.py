@@ -29,7 +29,7 @@ import wave
 import platform
 import random
 import time
-import re # 스트리밍 응답 처리를 위해 re 임포트
+import re 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Callable
@@ -99,11 +99,17 @@ SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
 MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
-PROMPT_TEXT = (
-    "다음은 사용자의 한국어 음성입니다. 정확한 최종 전사만 출력하세요."
-    " 규칙: (1) 사람 발화만, (2) 배경음/중얼거림/비언어음은 삭제,"
-    " (3) 종결어미·띄어쓰기·문장부호를 자연스럽게, (4) 기호나 철자가 헷갈리면 의미가 명확한 표현으로,"
-    " (5) '춤', '그만' 같은 지시어는 그대로 보존. 오직 텍스트만 출력."
+
+# [수정] 직접 오디오 처리 시 사용할 프롬프트
+ONE_SHOT_PROMPT = (
+    "다음 오디오를 듣고 다음 3가지를 수행하세요.\n"
+    "1. 사용자의 발화를 정확히 전사(transcript)하세요.\n"
+    "2. 의도(intent)를 분류하세요. (dance, stop, game, ox_quiz, joke, introduction, chat)\n"
+    "3. intent가 'chat' 또는 'introduction'이면 사용자의 말에 대한 답변(reply)을 작성하세요. (다른 intent면 reply는 빈 문자열)\n"
+    "   - 답변은 1~2문장으로 따뜻하게 작성하세요.\n"
+    "   - introduction인 경우 이름을 추출하세요.\n\n"
+    "반드시 아래 JSON 형식으로만 출력하세요:\n"
+    '{"text": "전사된 텍스트", "intent": "의도", "reply": "답변", "name": "이름(없으면 null)"}'
 )
 
 TTS_RATE = int(_get_env("TTS_RATE", "0"))
@@ -346,23 +352,10 @@ class PressToTalk:
         self.model = genai.GenerativeModel(MODEL_NAME)
         self.chat = genai.GenerativeModel(MODEL_NAME, system_instruction=SYSTEM_INSTRUCTION).start_chat(history=[])
 
+        # [참고] router_model은 초기화만 유지 (직접 호출하지 않음)
         self.router_model = genai.GenerativeModel(
             MODEL_NAME,
-            system_instruction=(
-                "너는 명령 라우터다. 한국어 문장을 보고 의도를 분류한다. "
-                "introduction=사용자가 자신의 이름을 명확히 밝히는 문장. (예: '내 이름은 OOO이야', '저는 OOO입니다', 'OOO이라고 해'). "
-                "dance=사용자가 실제로 춤을 '시작하라고' 명령/요청/승인. "
-                "game=가위바위보 게임을 시작하자는 요청. "
-                "ox_quiz=얼굴 인식 OX 퀴즈 게임을 시작하자는 요청. "
-                "joke=개그나 농담을 해달라는 명확한 요청. "
-                "stop=춤을 '멈추라'는 명령/요청/승인. "
-                "chat=일반 대화(질문/잡담/설명/감정표현/춤에 대한 견해·가정적 질문 포함). "
-                "부정/금지/거절 표현(예:'춤 추지 마','춤은 안돼','그만두지 말고 계속')은 정확히 반영하라. "
-                "오직 아래 JSON만 출력:\n"
-                '{ "intent": "dance|stop|game|ox_quiz|chat|joke|introduction", "normalized_text": "<의미만 보존한 간결한 문장>", '
-                '"speakable_reply": "<의도가 chat일 때 1~2문장 공감형 짧은 답변. dance/stop/game/joke/ox_quiz이면 빈 문자열>" }'
-                '"name": "<intent가 introduction일 때만 문맥을 파악해 추출한 [사람 이름]. 아닐 경우 null>" }'
-            ),
+            system_instruction="라우터는 이제 사용되지 않지만 구조 유지를 위해 남겨둡니다.",
             generation_config={"response_mime_type": "application/json", "temperature": 0.2}
         )
         
@@ -685,6 +678,8 @@ class PressToTalk:
                 wf.setframerate(samplerate); wf.writeframes(audio_np.tobytes())
             return buf.getvalue()
 
+    # [수정] _route_intent: 이제 _transcribe_then_chat 내부에서 Gemini가 직접 처리하므로 사용 빈도가 줄지만,
+    # 텍스트 기반 fallback을 위해 유지합니다.
     def _route_intent(self, text: str) -> dict:
         try:
             resp = self.router_model.generate_content(text)
@@ -715,172 +710,138 @@ class PressToTalk:
         elif any(w in low_text for w in ["궁금", "생각", "글쎄", "흠.."]): self.emotion_queue.put("THINKING")
         else: self.emotion_queue.put("NEUTRAL")
 
+    # ▼▼▼ [수정] 핵심 최적화: 오디오를 Gemini에게 직접 전송하여 처리 ▼▼▼
     @keep_awake
     def _transcribe_then_chat(self, wav_bytes: bytes):
-        intent = None
+        self.raise_busy_signal()
+        ts = datetime.now().strftime("%H:%M:%S")
+
+        intent = "chat"
         user_text = ""
         model_text = ""
-        is_chat_intent = False
-        self.raise_busy_signal()
-        
+        speak_text = ""
+
         try:
+            # 1. 오디오 데이터를 Gemini Chat 세션에 직접 전송 (JSON 프롬프트와 함께)
+            #    이렇게 하면 STT, 의도 분석, 답변 생성이 1번의 호출로 처리됩니다.
             b64 = base64.b64encode(wav_bytes).decode("ascii")
-            parts = [{"text": PROMPT_TEXT}, {"inline_data": {"mime_type": "audio/wav", "data": b64}}]
-            resp = self.model.generate_content(parts)
-            user_text = _extract_text(resp)
-            if not user_text: 
-                print("📝 전사 결과가 비어 있습니다.\n")
-                if self.emotion_queue:
-                    self.emotion_queue.put("NEUTRAL")
-                return
+            content_payload = [
+                ONE_SHOT_PROMPT,
+                {"inline_data": {"mime_type": "audio/wav", "data": b64}}
+            ]
+
+            # 스트리밍 대신 일반 호출 사용 (JSON 구조를 온전히 받기 위함)
+            # 속도가 매우 빠르기 때문에 스트리밍 없이도 충분합니다.
+            print(f"[{ts}] [Gemini] 오디오 전송 및 처리 중...")
+            response = self.chat.send_message(content_payload)
             
-            ts = datetime.now().strftime("%H:%M:%S"); print(f"[{ts}] [User ] {user_text}")
+            # 2. JSON 응답 파싱
+            json_text = _extract_text(response)
+            # JSON 마크다운(```json ... ```)이 있을 경우 제거
+            json_text = re.sub(r"```json\s*", "", json_text)
+            json_text = re.sub(r"```", "", json_text).strip()
+            
+            try:
+                result = json.loads(json_text)
+            except json.JSONDecodeError:
+                print(f"⚠️ JSON 파싱 실패. Raw response: {json_text}")
+                # 파싱 실패 시 전체 텍스트를 답변으로 간주
+                result = {"text": "(음성 인식)", "intent": "chat", "reply": json_text, "name": None}
 
-            route = self._route_intent(user_text)
-            intent = route.get("intent", "chat")
+            user_text = result.get("text", "")
+            intent = result.get("intent", "chat")
+            speak_text = result.get("reply", "")
+            name = result.get("name")
 
-            if self.emotion_queue and intent not in ("dance", "game", "ox_quiz"):
-                self.emotion_queue.put("NEUTRAL") 
-                print("😊 THINKING 종료: NEUTRAL로 즉시 전환")
+            print(f"[{ts}] [User] {user_text}")
+            print(f"[{ts}] [Intent] {intent}")
+            
+            # 감정 분석 실행
+            self._analyze_and_send_emotion(user_text)
 
-            if intent == "chat":
-                is_chat_intent = True
+            # 3. 의도에 따른 로직 실행
+            if intent == "introduction" and name:
+                print(f"💡 의도: INTRODUCTION, 추출 이름: {name}")
+                self.profile_manager.load_profile_for_chat(name)
+                # 인트로덕션도 대화로 이어짐
+                intent = "chat"
 
-            elif intent == "introduction":
-                name = route.get("name")
-                if name:
-                    print(f"💡 의도: INTRODUCTION, AI가 추출한 이름: {name}")
-                    self.profile_manager.load_profile_for_chat(name)
-                else:
-                    print("⚠️  의도: INTRODUCTION (이름 추출 실패). Chat으로 폴백.")
-                    intent = "chat"
-                    is_chat_intent = True
-
-            if not is_chat_intent:
-                    if self.emotion_queue:
-                        print("... Introduction 완료, NEUTRAL로 표정 리셋 ...")
-                        self.emotion_queue.put("NEUTRAL")
-
-            model_text, speak_text = "", ""
-
-            if intent == "chat":
-                # ▼▼▼ [수정] AI 답변 스트리밍 적용 ▼▼▼
-                print(f"[{ts}] [Gemini] 응답 스트리밍 시작...")
-                reply_stream = self.chat.send_message(user_text, stream=True)
-                
-                speak_text = ""
-                full_model_text = ""
-                current_sentence = ""
-                is_first_chunk = True
-
-                for chunk in reply_stream:
-                    chunk_text = _extract_text(chunk)
-                    if not chunk_text: continue
-
-                    full_model_text += chunk_text
-                    current_sentence += chunk_text
-
-                    if is_first_chunk and current_sentence.strip():
-                        print(f"  -> First chunk received, analyzing emotion...")
-                        self._analyze_and_send_emotion(current_sentence)
-                        is_first_chunk = False
-
-                    # 문장 종결 부호(.!?) 또는 줄바꿈(\n)을 만나면, 해당 문장을 즉시 말함
-                    if any(c in current_sentence for c in ".!?\n"):
-                        # 문장 종결 부호 기준으로 문장 분리 (정규표현식 사용)
-                        sentences_to_speak = re.split(r'(?<=[.!?\n])\s*', current_sentence)
-                        
-                        if len(sentences_to_speak) > 1:
-                            # 마지막 조각(아직 완성되지 않음)을 제외하고 모두 말함
-                            current_sentence = sentences_to_speak.pop(-1)
-                            for sentence in sentences_to_speak:
-                                if sentence.strip():
-                                    print(f"  -> Speaking chunk: {sentence.strip()}")
-                                    self._speak_and_subtitle(sentence.strip())
-                        # (else: 아직 문장 종결 부호가 나오지 않음, 다음 청크까지 대기)
-                
-                # 스트림이 끝나고 남은 마지막 문장 처리
-                if current_sentence.strip():
-                    print(f"  -> Speaking final chunk: {current_sentence.strip()}")
-                    self._speak_and_subtitle(current_sentence.strip())
-
-                model_text = full_model_text # 요약을 위해 전체 텍스트 저장
-                speak_text = "" # 이미 다 말했으므로 비움
-                
-                if self.emotion_queue:
-                    print("... TTS 완료, NEUTRAL로 표정 리셋 ...")
-                    self.emotion_queue.put("NEUTRAL")
-                # ▲▲▲ 스트리밍 적용 끝 ▲▲▲
-
-            elif intent == "dance":
+            if intent == "dance":
                 print("💡 의도: DANCE START")
-                if callable(self.start_dance_cb):
-                    try: 
-                        self.start_dance_cb()
-                    except Exception as e: print(f"⚠️ start_dance_cb 실행 오류: {e}")
-                
-                if self.emotion_queue:
-                    if self.emotion_queue: self.emotion_queue.put("EXCITED")
-                    print(f"💃 춤 시작! 표정을 EXCITED로 변경합니다.")
 
-                model_text = "네! 모티가 춤을 춰볼게요"; speak_text = "네! 모티가 춤을 춰볼게요"
+                self._speak_and_subtitle("네! 신나게 춤춰볼게요!")
+                speak_text = ""
+
+                dance_time = 0
+                if callable(self.start_dance_cb): 
+                    result = self.start_dance_cb()
+                    print(f"🕵️ [DEBUG] 춤 함수 반환값: {result}")
+
+                    if isinstance(result, (int, float)) and result > 0:
+                        dance_time = result
+                    else:
+                        print("⚠️ 춤 시간이 확인되지 않아 기본값(40초)으로 설정합니다.")
+                        dance_time = 40
+
+                if self.emotion_queue: 
+                    self.emotion_queue.put("EXCITED")
+                
+                print(f"⏳ 춤추는 중... ({dance_time}초간 음성인식 차단)")
+                time.sleep(dance_time)
+
+                print("✅ 춤 종료 대기 끝, 다시 듣기 모드 전환")
 
             elif intent == "stop":
-                print("💡 의도: DANCE STOP")
-                if callable(self.stop_dance_cb):
-                    try: 
-                        self.stop_dance_cb()
-                    except Exception as e: print(f"⚠️ stop_dance_cb 실행 오류: {e}")
-                
+                print("💡 의도: STOP")
+                if callable(self.stop_dance_cb): self.stop_dance_cb()
                 if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                model_text = "(춤 정지 명령 처리)"
+                speak_text = "" # 멈출 땐 보통 말 없이 멈춤
 
-            elif intent == "joke":
-                print("💡 의도: JOKE (EntertainmentHandler로 위임)")
-                self.entertain_handler.run_joke()
-                speak_text = ""
-                model_text = "(농담 실행)"
-
-            elif intent == "ox_quiz":
-                print("💡 의도: OX QUIZ (EntertainmentHandler로 위임)")
-                self.entertain_handler.run_ox_quiz()
-                speak_text = ""
-                model_text = "(OX 퀴즈 실행)"
-            
             elif intent == "game":
-                print("💡 의도: RPS GAME (EntertainmentHandler로 위임)")
+                print("💡 의도: GAME")
                 self.entertain_handler.run_rps_game()
                 speak_text = ""
-                model_text = "(가위바위보 실행)"
+
+            elif intent == "ox_quiz":
+                print("💡 의도: OX QUIZ")
+                self.entertain_handler.run_ox_quiz()
+                speak_text = ""
+
+            elif intent == "joke":
+                print("💡 의도: JOKE")
+                self.entertain_handler.run_joke()
+                speak_text = ""
             
-            if speak_text: 
-                # dance, stop 등 간단한 응답 처리
+            # 4. 답변 말하기 (Chat 의도이거나, Dance 등의 멘트가 있을 때)
+            if speak_text:
+                print(f"[{ts}] [Gemini Reply] {speak_text}")
                 self._speak_and_subtitle(speak_text)
+                model_text = speak_text
             
-        except Exception as e: 
+            # 5. 표정 리셋
+            if self.emotion_queue and intent == "chat":
+                self.emotion_queue.put("NEUTRAL")
+
+        except Exception as e:
             print(f"❌ 처리 실패: {e}\n")
-            if self.emotion_queue:
-                    self.emotion_queue.put("NEUTRAL")
-
+            if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
+        
         finally:
-            # 1. 모든 TTS 출력이 끝날 때까지 기다립니다.
-            print("... 모든 TTS 출력이 끝날 때까지 대기 중 ...")
-            self.tts.wait() 
-            print("... TTS 출력 완료 ...")
+            print("... TTS 대기 ...")
+            self.tts.wait()
 
-            # 2. [수정] 'chat' 또는 'introduction'일 경우, 백그라운드에서 '실시간 메모리' 업데이트
+            # 6. [중요] 실시간 메모리 업데이트 (단기 기억)
+            # Gemini가 직접 처리했으므로 user_text와 model_text가 확보됨
             if (intent == "chat" or intent == "introduction") and user_text and model_text:
-                print("... (백그라운드에서 실시간 메모리 업데이트 시작)")
-                try:
+                 try:
                     threading.Thread(
-                        target=self.profile_manager.update_summary_after_chat, # <<< 새 함수 호출
-                        args=(user_text, model_text), 
+                        target=self.profile_manager.update_summary_after_chat,
+                        args=(user_text, model_text),
                         daemon=True
                     ).start()
-                except Exception as e:
-                    print(f"❌ 프로필 요약 스레드 시작 중 오류 발생: {e}")
-            
-            # 3. 모든 작업이 끝났으므로 busy signal을 낮춤
+                 except Exception as e:
+                    print(f"❌ 프로필 업데이트 오류: {e}")
+
             self.lower_busy_signal()
 
     def _on_press(self, key):
