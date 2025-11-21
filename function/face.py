@@ -396,10 +396,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     start_point = (int(x_min * w), int(y_min * h))
                     end_point = (int(x_max * w), int(y_max * h))
                     cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
-            
-            # [FPS 추가] 화면에 FPS 그리기 (노란색, y=70 위치)
-            cv2.putText(frame, f"FPS: {int(fps)}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
-
                     
             user_name = shared_state.get('detected_user', 'Unknown')
             _publish_frame(frame)
