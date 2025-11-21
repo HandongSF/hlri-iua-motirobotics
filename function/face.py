@@ -1,21 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
-
 # function/face.py
 
 from __future__ import annotations
@@ -108,20 +90,29 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     home_tilt_pos = read_pos(C.TILT_ID)
     pan_pos  = home_pan_pos
     tilt_pos = home_tilt_pos
+    
+    # [추가] 마지막으로 모터에 전송한 위치를 기억하는 변수
+    last_sent_pan = pan_pos
+    last_sent_tilt = tilt_pos
+
     if print_debug:
         print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
+    # ============================================================
+    #         ↓↓↓ [추가] 얼굴 추적용 가속도 및 속도 설정 ↓↓↓
+    # ============================================================
     print(f"🤖 추적 모터(Pan/Tilt)에 가속도 및 속도({C.PROFILE_VELOCITY}) 설정...")
     with lock:
-        # 0이 아닌 값을 설정하여 부드러운 사다리꼴 프로파일 활성화
-        # 값이 낮을수록 반응이 빠르고, 높을수록 부드럽습니다.
-        accel_value = 20 # (0=즉각 반응, 20=부드럽고 빠름, 50=매우 부드러움)
+        # 가속도 값을 설정하여 움직임을 부드럽게 만듭니다.
+        # 값이 0이면 급출발/급정거, 값이 높을수록 부드럽게 출발/정지합니다.
+        accel_value = 30 
         
         io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, C.PROFILE_VELOCITY)
         io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, C.PROFILE_VELOCITY)
         
         io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
         io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+    # ============================================================
 
     print(f"▶ 카메라({camera_index})를 여는 중입니다...")
     cap = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
@@ -144,9 +135,12 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
 
     last_mouth_open_time = 0.0
     is_speaking_state = False
-    MOUTH_OPEN_THRESHOLD = 0.08  
+    MOUTH_OPEN_THRESHOLD = 0.08   
     SPEAKING_TIMEOUT_SEC = 2.0 
     
+    # [FPS 추가] FPS 계산을 위한 이전 시간 초기화
+    prev_time = 0
+
     def get_blendshape_score(blendshape_list, category_name):
         for category in blendshape_list:
             if category.category_name == category_name:
@@ -162,6 +156,15 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         while not stop_event.is_set():
             ok, frame = cap.read()
             if not ok: break
+
+            # [FPS 추가] 시간 측정 및 FPS 계산
+            current_time = time.time()
+            fps = 0
+            if prev_time != 0:
+                delta_time = current_time - prev_time
+                if delta_time > 0:
+                    fps = 1 / delta_time
+            prev_time = current_time
 
             frame = cv2.flip(frame, 1)
 
@@ -237,16 +240,20 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             frame_timestamp_ms = int(time.perf_counter() * 1000)
             res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
             
+            # --- 입 모양 감지 로직 ---
             if mouth_event_queue and res.face_blendshapes and res.face_blendshapes[0]:
                 bs = res.face_blendshapes[0]
-                
                 mouth_open_score = get_blendshape_score(bs, 'jawOpen')
+      
+                debug_counter += 1
+                if debug_counter % 30 == 0: # 로그 출력 빈도 줄임
+                    print(f"👄 Mouth Score: {mouth_open_score:.4f}")
                 
                 is_mouth_currently_open = mouth_open_score > MOUTH_OPEN_THRESHOLD
-                current_time = time.time()
+                current_sys_time = time.time()
 
                 if is_mouth_currently_open:
-                    last_mouth_open_time = current_time
+                    last_mouth_open_time = current_sys_time
                     if not is_speaking_state:
                         print("👄 Mouth open detected, sending START_RECORDING")
                         is_speaking_state = True
@@ -254,13 +261,14 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                             mouth_event_queue.put_nowait("START_RECORDING")
                         except Exception: pass
                 else:
-                    if is_speaking_state and (current_time - last_mouth_open_time > SPEAKING_TIMEOUT_SEC):
+                    if is_speaking_state and (current_sys_time - last_mouth_open_time > SPEAKING_TIMEOUT_SEC):
                         print("👄 Mouth closed for 2s, sending STOP_RECORDING")
                         is_speaking_state = False
                         try:
                             mouth_event_queue.put_nowait("STOP_RECORDING")
                         except Exception: pass
 
+            # --- 모드 변경 감지 ---
             current_mode = shared_state.get('mode', 'tracking')
 
             if current_mode != last_mode:
@@ -270,22 +278,26 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     with lock:
                         io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, pan_pos)
                         io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
+                    last_sent_pan, last_sent_tilt = pan_pos, tilt_pos # 위치 리셋 시 동기화
                 
                 elif current_mode == 'tracking':
                     print("▶ Mode changed to Tracking: Re-reading current motor position.")
                     pan_pos = read_pos(C.PAN_ID)
                     tilt_pos = read_pos(C.TILT_ID)
+                    last_sent_pan, last_sent_tilt = pan_pos, tilt_pos # 위치 리셋 시 동기화
                 last_mode = current_mode
 
+            # --- 얼굴 추적 로직 ---
             if current_mode == 'tracking':
                 if not sleepy_event.is_set():
                     if res.face_landmarks:
-                        lm = res.face_landmarks[0][1]
+                        lm = res.face_landmarks[0][1] # 코 끝 좌표
                         nx, ny = int(lm.x * w), int(lm.y * h)
 
                         error_pan = nx - cx
                         error_tilt = cy - ny
 
+                        # PID 제어
                         if abs(error_pan) > C.DEAD_ZONE or abs(error_tilt) > C.DEAD_ZONE:
                             integral_pan += error_pan
                             integral_tilt += error_tilt
@@ -293,6 +305,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                             integral_tilt = io.clamp(integral_tilt, -200, 200)
                             derivative_pan = error_pan - last_error_pan
                             derivative_tilt = error_tilt - last_error_tilt
+                            
                             pan_delta = (error_pan * C.KP_PAN) + (integral_pan * C.KI_PAN) + (derivative_pan * C.KD_PAN)
                             tilt_delta = (error_tilt * C.KP_TILT) + (integral_tilt * C.KI_TILT) + (derivative_tilt * C.KD_TILT)
                         else:
@@ -302,13 +315,30 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         last_error_pan = error_pan
                         last_error_tilt = error_tilt
                         
+                        # 목표 위치 계산
                         pan_pos  = int(io.clamp(pan_pos  + C.PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
                         tilt_pos = int(io.clamp(tilt_pos + C.TILT_SIGN * tilt_delta, C.SERVO_MIN, C.TILT_POS_MAX))
 
-                        with lock:
-                            io.write4(pkt, port, C.PAN_ID,  C.ADDR_GOAL_POSITION, pan_pos)
-                            io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
+                        # ▼▼▼ [핵심 수정] 미세한 떨림(노이즈) 방지 로직 ▼▼▼
+                        # 계산된 목표 위치와 마지막으로 전송한 위치의 차이가 
+                        # 최소 임계값(MIN_MOVE_DELTA)보다 클 때만 모터에 명령을 보냅니다.
+                        # 이렇게 하면 불필요한 미세 전류 공급을 막아 발열을 줄입니다.
+                        move_threshold = getattr(C, 'MIN_MOVE_DELTA', 5) # config.py에 정의된 값 사용 (기본 5)
                         
+                        should_move_pan = abs(pan_pos - last_sent_pan) > move_threshold
+                        should_move_tilt = abs(tilt_pos - last_sent_tilt) > move_threshold
+
+                        if should_move_pan or should_move_tilt:
+                            with lock:
+                                if should_move_pan:
+                                    io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, pan_pos)
+                                    last_sent_pan = pan_pos # 전송한 위치 업데이트
+                                
+                                if should_move_tilt:
+                                    io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
+                                    last_sent_tilt = tilt_pos # 전송한 위치 업데이트
+                        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
                         cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
                         cv2.circle(frame, (nx, ny), 5, (0, 0, 255), -1)
                         cv2.putText(frame, "Mode: Tracking", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
@@ -316,6 +346,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     cv2.putText(frame, "Mode: Tracking (Sleepy)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
             
             elif current_mode == 'ox_quiz':
+                # (OX 퀴즈 그래픽 그리기 로직은 기존과 동일)
                 left_count, right_count = 0, 0
                 if res.face_landmarks:
                     for face_landmarks in res.face_landmarks:
@@ -348,11 +379,18 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     start_point = (int(x_min * w), int(y_min * h))
                     end_point = (int(x_max * w), int(y_max * h))
                     cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
+            
+            # [FPS 추가] 화면에 FPS 그리기 (노란색, y=70 위치)
+            cv2.putText(frame, f"FPS: {int(fps)}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
                     
             user_name = shared_state.get('detected_user', 'Unknown')
             _publish_frame(frame)
 
     finally:
+        # ============================================================
+        #         ↓↓↓ [추가] 모터 설정을 기본값으로 초기화 ↓↓↓
+        # ============================================================
         print(f"🤖 추적 모터(Pan/Tilt) 설정 초기화 (가속도 0, 속도 100)...")
         try:
             with lock:
@@ -364,6 +402,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                 io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, 0) # 가속도 0 (기본값)
         except Exception as e:
             print(f"⚠️  추적 모터 설정 초기화 중 오류: {e}")
+        # ============================================================
+        
         try: cap.release()
         except Exception: pass
         landmarker.close()
