@@ -41,6 +41,7 @@ from .emotions.thinking import Emotion as ThinkingEmotion
 from .emotions.sleepy import Emotion as SleepyEmotion
 from .emotions.wake import Emotion as WakeEmotion
 from .emotions.close import Emotion as CloseEmotion
+from .emotions.scanning import Emotion as ScanningEmotion
 from .emotions import eyebrow
 from .emotions import cheeks
 from dotenv import load_dotenv
@@ -108,7 +109,7 @@ class RobotFaceApp:
             "TENDER": TenderEmotion(), "SCARED": ScaredEmotion(), "ANGRY": AngryEmotion(), 
             "SAD": SadEmotion(), "SURPRISED": SurprisedEmotion(), "LISTENING": ListeningEmotion(),
             "THINKING": ThinkingEmotion(), "SLEEPY": SleepyEmotion(), "WAKE": WakeEmotion(), 
-            "CLOSE": CloseEmotion()
+            "CLOSE": CloseEmotion(), "SCANNING": ScanningEmotion()
         }
         self.current_emotion_key = "NEUTRAL"
 
@@ -156,7 +157,7 @@ class RobotFaceApp:
             if event.type == pygame.KEYDOWN:
                 key_map = {
                     pygame.K_1: "NEUTRAL", pygame.K_2: "HAPPY", pygame.K_3: "EXCITED",
-                    pygame.K_4: "TENDER", pygame.K_5: "SCARED", pygame.K_6: "ANGRY",
+                    pygame.K_4: "TENDER", pygame.K_5: "SCANNING", pygame.K_6: "ANGRY",
                     pygame.K_7: "SAD", pygame.K_8: "SURPRISED", pygame.K_9: "THINKING",
                     pygame.K_0: "CLOSE", 
                 }
@@ -172,7 +173,7 @@ class RobotFaceApp:
                 else: self.click_count = 0
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1: self.is_mouse_down = False
             if event.type == pygame.USEREVENT + 1: 
-                if self.current_emotion_key not in ["LISTENING"]:
+                if self.current_emotion_key not in ["LISTENING", "SCANNING"]:
                     self.target_offset = self.get_random_target_offset()
             if event.type == pygame.USEREVENT + 2 and not self.is_blinking:
                 self.is_blinking = True
@@ -223,6 +224,20 @@ class RobotFaceApp:
             self.target_offset = [0.0, 0.0]
             self.common_data['offset'] = [0.0, 0.0]
         
+        elif self.current_emotion_key == "SCANNING":
+            # SCANNING 감정일 때는 자동 회전 로직을 적용합니다.
+            
+            # [자동 회전 로직]
+            current_time = pygame.time.get_ticks() / 1000.0
+            rotation_radius = 40  # 회전 반경 (원하시면 조절하세요)
+            rotation_speed = 2.0  # 회전 속도 (원하시면 조절하세요)
+            
+            offset_x = math.cos(current_time * rotation_speed) * rotation_radius
+            offset_y = math.sin(current_time * rotation_speed) * rotation_radius
+            
+            self.common_data['offset'][0] = offset_x
+            self.common_data['offset'][1] = offset_y
+            
         else:
             dx, dy = self.target_offset[0] - self.common_data['offset'][0], self.target_offset[1] - self.common_data['offset'][1]
             dist = math.hypot(dx, dy)
@@ -243,7 +258,7 @@ class RobotFaceApp:
         current_emotion = self.emotions[self.current_emotion_key]
         current_emotion.draw(self.base_surface, self.common_data)
 
-        if self.is_blinking and self.current_emotion_key != "SLEEPY":
+        if self.is_blinking and self.current_emotion_key not in ["SLEEPY", "SCANNING"]:
             progress = self.blink_progress if self.blink_progress <= 100 else 200 - self.blink_progress
             for eye_center in [self.common_data['left_eye'], self.common_data['right_eye']]:
                 top_rect = (eye_center[0]-100, eye_center[1]-150, 200, progress+50)

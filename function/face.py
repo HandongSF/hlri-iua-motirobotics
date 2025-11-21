@@ -24,6 +24,7 @@ import threading
 import platform
 import queue
 import time
+from .vision_brain import RobotBrain
 from . import config as C, dxl_io as io, suppress
 from dynamixel_sdk import PortHandler, PacketHandler
 from mediapipe.framework.formats import landmark_pb2
@@ -70,7 +71,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                          mouth_event_queue: queue.Queue | None = None,
                          camera_index: int = 1,
                          draw_mesh: bool = True,
-                         print_debug: bool = True):
+                         print_debug: bool = True,
+                         brain: RobotBrain = None):
 
     cv2, mp = suppress.import_cv2_mp()
 
@@ -151,6 +153,11 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                 return category.score
         return 0.0
 
+    last_recog_time = 0
+    RECOG_INTERVAL = 1 # 1초마다 인식 시도 (과부하 방지)
+
+    is_initial_recognition_active = True
+
     try:
         while not stop_event.is_set():
             ok, frame = cap.read()
@@ -163,6 +170,65 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     video_frame_q.put_nowait(frame.copy())
             except Exception: pass
             
+            current_mode = shared_state.get('mode', 'tracking') # 현재 모드를 여기서 가져옵니다.
+
+            if brain and not sleepy_event.is_set():
+                cur_time = time.time()
+                
+                # 1. 강제 학습 모드인지 확인 (Gemini가 10초간 켜둠)
+                force_learning = shared_state.get('force_learning', False)
+                target_name = shared_state.get('learning_target_name', None)
+
+                # 2. 초기 인식 상태 업데이트
+                # detected_user가 Unknown이 아니거나, 로그인 된 사용자가 있다면 인식 중단
+                if shared_state.get('detected_user') not in ["Unknown", None, "Thinking..."] or shared_state.get('current_user_name') is not None:
+                    is_initial_recognition_active = False
+
+
+                # 3. [핵심 수정] RobotBrain 실행 조건
+                #   A. 강제 학습 모드일 때 (최우선)
+                #   B. tracking 모드이고, 초기 인식이 필요하거나, 인식 주기에 도달했을 때
+                
+                is_recognition_needed = (
+                    force_learning or 
+                    (current_mode == 'tracking' and is_initial_recognition_active)
+                )
+
+                if is_recognition_needed:
+                    
+                    last_recog_time = cur_time
+                    
+                    recog_frame = frame.copy()
+                    emb, name = brain.recognize_face(recog_frame) # <-- 고부하 로직 실행
+                    
+                    # 상태 공유 및 로그
+                    if emb is not None:
+                        shared_state['current_face_embedding'] = emb
+                        
+                        # [추가] 초기 인식 기간 동안에는 detected_user를 업데이트하여 PressToTalk의 run() 루프가 로그인 처리하도록 돕습니다.
+                        if is_initial_recognition_active and name not in [None, "Unknown", "Thinking..."]:
+                            shared_state['detected_user'] = name 
+                            
+                        # [추가] 일반 인식 시 로그 출력 (디버깅용)
+                        if not force_learning and print_debug and name != "Thinking...":
+                            print(f"👤 [일반 인식] detected_user: {shared_state.get('detected_user')}, ART Result: {name}")
+
+                    else:
+                        shared_state['current_face_embedding'] = None
+                        if is_initial_recognition_active:
+                            shared_state['detected_user'] = "Unknown"
+                        
+                    # 4. [핵심] 집중 학습 실행 (강제 학습 모드에서만 실행됨)
+                    if force_learning and emb is not None and target_name:
+                        # 뇌에 강제 주입 (쿨타임 없음)
+                        msg = brain.register_face(emb, target_name)
+                        if print_debug:
+                            print(f"🔥 [집중 학습 중] {target_name}: {msg}")
+                            
+                        # 화면에 '학습 중' 표시 (UI)
+                        cv2.putText(frame, "SCANNING MODE", (10, 100), 
+                                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
             h, w = frame.shape[:2]
             cx, cy = w // 2, h // 2
 
@@ -282,7 +348,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     start_point = (int(x_min * w), int(y_min * h))
                     end_point = (int(x_max * w), int(y_max * h))
                     cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
-            
+                    
+            user_name = shared_state.get('detected_user', 'Unknown')
             _publish_frame(frame)
 
     finally:
