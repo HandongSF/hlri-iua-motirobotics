@@ -57,13 +57,34 @@ def draw_star(surface, center, size, color):
     pygame.draw.polygon(surface, color, points)
 
 def draw_base_eye(surface, base_center, pupil_offset, pupil_radius, start_color, end_color, is_excited=False, highlight_r=20):
-    pygame.draw.circle(surface, WHITE, base_center, 100)
-    pupil_center = (int(base_center[0] + pupil_offset[0]), int(base_center[1] + pupil_offset[1]))
-    pygame.draw.circle(surface, DARK_GRAY, pupil_center, 80)
-    draw_gradient_pupil(surface, pupil_center, pupil_radius, start_color, end_color)
+    
+    # 1. 시야 제한 로직 추가 (선택적이지만 안전성을 위해 권고)
+    iris_radius = 80
+    max_offset_distance = 100 - iris_radius 
+    
+    offset_x, offset_y = pupil_offset
+    current_distance = math.hypot(offset_x, offset_y)
+    
+    if current_distance > max_offset_distance:
+        if current_distance == 0: current_distance = 1 # 0 나누기 방지
+        scale = max_offset_distance / current_distance 
+        offset_x *= scale
+        offset_y *= scale
+        
+    pupil_center = (int(base_center[0] + offset_x), int(base_center[1] + offset_y))
+    
+    # 2. 눈 그리기
+    pygame.draw.circle(surface, WHITE, base_center, 100) # 흰자
+    pygame.draw.circle(surface, DARK_GRAY, pupil_center, iris_radius) # 홍채 (80)
+    draw_gradient_pupil(surface, pupil_center, pupil_radius, start_color, end_color) # 동공 (pupil_radius)
+    
+    # 3. 하이라이트
     highlight_pos = (pupil_center[0] - 30, pupil_center[1] - 30)
     if is_excited:
         star_size = 30 + math.sin(pygame.time.get_ticks() * 0.015) * 8
         draw_star(surface, highlight_pos, star_size, YELLOW)
     else:
         pygame.draw.circle(surface, WHITE, highlight_pos, highlight_r)
+
+    # 4. 동공의 최종 위치 반환 (SCANNING 감정에 필요)
+    return pupil_center

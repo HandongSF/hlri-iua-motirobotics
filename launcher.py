@@ -45,6 +45,8 @@ from function.rock_paper import rock_paper_game_worker
 from function.ox_game import ox_quiz_game_worker
 from display.subtitle import subtitle_window_process
 
+from function.vision_brain import RobotBrain
+
 def _get_env(name: str, default: str) -> str:
     v = os.environ.get(name)
     return default if v is None or not str(v).strip() else str(v).strip()
@@ -90,7 +92,7 @@ def run_ptt(
     emotion_queue, subtitle_queue, hotword_queue, stop_event,
     rps_command_q, rps_result_q, sleepy_event, shared_state,
     ox_command_q, ox_result_q, mouth_event_queue,
-    perform_head_nod_cb
+    perform_head_nod_cb, brain_instance
 ):
     """PTT 스레드를 실행하는 타겟 함수"""
     try:
@@ -114,7 +116,8 @@ def run_ptt(
             ox_command_q=ox_command_q,
             ox_result_q=ox_result_q,
             mouth_event_queue=mouth_event_queue,
-            perform_head_nod_cb=perform_head_nod_cb 
+            perform_head_nod_cb=perform_head_nod_cb,
+            brain_instance=brain_instance
         )
         app.run()
     except Exception as e:
@@ -138,7 +141,13 @@ def main():
     ox_result_q = multiprocessing.Queue()
     video_frame_q = queue.Queue(maxsize=1)
     sleepy_event = threading.Event()
-    shared_state = {'mode': 'tracking'}
+    shared_state = {'mode': 'tracking', 'detected_user': None, 'current_face_embedding': None}
+
+    try:
+        brain = RobotBrain()
+    except Exception as e:
+        print(f"❌ RobotBrain 초기화 실패: {e}")
+        brain = None
 
     subtitle_q = multiprocessing.Queue()
     subtitle_proc = multiprocessing.Process(
@@ -173,7 +182,7 @@ def main():
     t_face = threading.Thread(
         target=F.face_tracker_worker,
         args=(port, pkt, dxl_lock, stop_event, video_frame_q, sleepy_event, shared_state),
-        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True, mouth_event_queue=mouth_event_queue),
+        kwargs=dict(camera_index=cam_index, draw_mesh=True, print_debug=True, mouth_event_queue=mouth_event_queue, brain=brain),
         name="face", daemon=True)
 
     start_dance = lambda: D.start_new_dance(port, pkt, dxl_lock, shared_state, home_pan, home_tilt, emotion_queue)
@@ -189,6 +198,7 @@ def main():
     t_ptt = threading.Thread(
         target=run_ptt,
         args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue, perform_head_nod),
+        kwargs={'brain_instance': brain},
         name="ptt", daemon=True)
 
     t_visual_face = threading.Thread(
@@ -232,6 +242,11 @@ def main():
     finally:
         if not stop_event.is_set(): stop_event.set()
         print("▶ 모든 스레드 종료 대기 중...")
+
+        if brain:
+            print("💾 종료 시 뇌 저장 중...")
+            brain.save_brain()
+            
         if subtitle_q:
             subtitle_q.put("__QUIT__")
         if subtitle_proc:
