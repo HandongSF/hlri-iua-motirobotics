@@ -1,21 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
-
 # function/face.py
 
 from __future__ import annotations
@@ -154,6 +136,9 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     MOUTH_OPEN_THRESHOLD = 0.08   
     SPEAKING_TIMEOUT_SEC = 2.0 
     
+    # [FPS 추가] FPS 계산을 위한 이전 시간 초기화
+    prev_time = 0
+
     def get_blendshape_score(blendshape_list, category_name):
         for category in blendshape_list:
             if category.category_name == category_name:
@@ -164,6 +149,15 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         while not stop_event.is_set():
             ok, frame = cap.read()
             if not ok: break
+
+            # [FPS 추가] 시간 측정 및 FPS 계산
+            current_time = time.time()
+            fps = 0
+            if prev_time != 0:
+                delta_time = current_time - prev_time
+                if delta_time > 0:
+                    fps = 1 / delta_time
+            prev_time = current_time
 
             frame = cv2.flip(frame, 1)
 
@@ -190,10 +184,10 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     print(f"👄 Mouth Score: {mouth_open_score:.4f}")
                 
                 is_mouth_currently_open = mouth_open_score > MOUTH_OPEN_THRESHOLD
-                current_time = time.time()
+                current_sys_time = time.time()
 
                 if is_mouth_currently_open:
-                    last_mouth_open_time = current_time
+                    last_mouth_open_time = current_sys_time
                     if not is_speaking_state:
                         print("👄 Mouth open detected, sending START_RECORDING")
                         is_speaking_state = True
@@ -201,7 +195,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                             mouth_event_queue.put_nowait("START_RECORDING")
                         except Exception: pass
                 else:
-                    if is_speaking_state and (current_time - last_mouth_open_time > SPEAKING_TIMEOUT_SEC):
+                    if is_speaking_state and (current_sys_time - last_mouth_open_time > SPEAKING_TIMEOUT_SEC):
                         print("👄 Mouth closed for 2s, sending STOP_RECORDING")
                         is_speaking_state = False
                         try:
@@ -320,6 +314,9 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     end_point = (int(x_max * w), int(y_max * h))
                     cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
             
+            # [FPS 추가] 화면에 FPS 그리기 (노란색, y=70 위치)
+            cv2.putText(frame, f"FPS: {int(fps)}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
             _publish_frame(frame)
 
     finally:
