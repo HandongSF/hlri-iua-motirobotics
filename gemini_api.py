@@ -847,6 +847,11 @@ class PressToTalk:
             
             if speak_text:
                 print(f"[{ts}] [Gemini Reply] {speak_text}")
+
+                # ▼▼▼ [수정] 말하기 직전에 답변 내용(speak_text)을 분석해 표정을 바꿉니다 ▼▼▼
+                self._analyze_and_send_emotion(speak_text)
+                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
                 self._speak_and_subtitle(speak_text)
                 model_text = speak_text
             
