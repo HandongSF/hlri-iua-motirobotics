@@ -98,7 +98,7 @@ def keep_awake(func: Callable):
                 self.emotion_queue.put("RESET_SLEEPY_TIMER")
     return wrapper
 
-# --- 전역 상수는 그대로 둠 ---
+# --- 전역 상수 ---
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
@@ -128,7 +128,7 @@ class RecorderState:
     frames_q: queue.Queue = queue.Queue()
     stream: sd.InputStream | None = None
 
-# --- TTS Worker 클래스들은 그대로 둠 ---
+# --- TTS Worker 클래스 ---
 class SapiTTSWorker:
     def __init__(self):
         self._q: queue.Queue[str | dict | None] = queue.Queue()
@@ -361,14 +361,17 @@ class PressToTalk:
             generation_config={"response_mime_type": "application/json", "temperature": 0.2}
         )
         
-        # ▼▼▼ [수정] 프로필 관련 변수 초기화 (ProfileManager가 사용) ▼▼▼
+        # ▼▼▼ 프로필 관련 변수 초기화 ▼▼▼
         self.current_user_name = None
         self.profile_db_file = PROFILE_DB_FILE
         self.initial_chat_summary = "아직 기록된 내용이 없습니다."
         self.initial_last_seen_str = "기록 없음"
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-        # --- 콜백 및 큐 저장 (기존과 동일) ---
+        # ▼▼▼ [NEW] 대화 세션 기록을 위한 메모리 버퍼 ▼▼▼
+        self.session_history = []
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+        # --- 콜백 및 큐 저장 ---
         self.start_dance_cb = start_dance_cb
         self.stop_dance_cb  = stop_dance_cb
         self.play_rps_motion_cb = play_rps_motion_cb
@@ -405,7 +408,7 @@ class PressToTalk:
         self.nodding_thread = None
         self.stop_nodding_event = threading.Event()
 
-        # --- TTS 및 상태 초기화 (기존과 동일) ---
+        # --- TTS 및 상태 초기화 ---
         default_engine = "sapi" if IS_WINDOWS else "typecast"
         engine = _get_env("TTS_ENGINE", default_engine).lower()
         if engine == "sapi" and not IS_WINDOWS: engine = "typecast"
@@ -416,14 +419,13 @@ class PressToTalk:
         self.state = RecorderState()
         self._print_intro()
 
-        # ▼▼▼ [추가] 핸들러 클래스 초기화 (반드시 self.xxx 변수 설정 *이후*에) ▼▼▼
+        # ▼▼▼ 핸들러 클래스 초기화 ▼▼▼
         self.entertain_handler = EntertainmentHandler(self)
         self.present_handler = PresentationHandler(self)
         self.profile_manager = ProfileManager(self)
 
         # ProfileManager에게 DB 초기화를 위임
         self.profile_manager.init_db()
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         
         if ENABLE_GREETING:
             self._speak_and_subtitle(GREETING_TEXT)
@@ -440,16 +442,9 @@ class PressToTalk:
         self.stop_announcement_event = threading.Event()
         self.announcement_active = False
 
-    # --- [삭제] _init_profile_db, load_profile, update_profile_summary_at_exit ---
-    # (이 함수들은 profile_manager.py로 이동함)
-
-    # --- [삭제] _announcement_worker, toggle_announcement, _run_presenter_intro, _speak_farewell ---
-    # (이 함수들은 present.py로 이동함)
-    
-    # --- [유지] _fetch_quizzes_in_background (EntertainmentHandler가 사용) ---
     def _fetch_quizzes_in_background(self, result_container: list):
         """[백그라운드 스레드용] Gemini API를 호출하여 퀴즈 목록을 생성하고 result_container에 저장합니다."""
-        print("  - 🏃 (백그라운드) 본 게임 퀴즈 생성을 시작합니다...")
+        print("   - 🏃 (백그라운드) 본 게임 퀴즈 생성을 시작합니다...")
         try:
             quiz_prompt = (
                 "어린이도 이해할 수 있는, 재미있고 간단한 상식 OX 퀴즈를 한국어로 10개만 만들어줘. "
@@ -464,11 +459,10 @@ class PressToTalk:
             raw_json = _extract_text(quiz_response)
             quizzes = json.loads(raw_json)
             result_container.extend(quizzes)
-            print(f"  - ✅ (백그라운드) 퀴즈 {len(quizzes)}개 생성 완료!")
+            print(f"   - ✅ (백그라운드) 퀴즈 {len(quizzes)}개 생성 완료!")
         except Exception as e:
-            print(f"  - ❌ (백그라운드) 퀴즈 생성 실패: {e}")  
+            print(f"   - ❌ (백그라운드) 퀴즈 생성 실패: {e}")  
 
-    # --- [유지] _listening_nod_worker (경청 끄덕임) ---
     def _listening_nod_worker(self):
         """사용자가 말하는 동안 랜덤하게 고개를 끄덕이는 백그라운드 스레드"""
         print("👂 경청 모드: 랜덤 끄덕임 스레드 시작...")
@@ -480,7 +474,7 @@ class PressToTalk:
             return
 
         while not self.stop_nodding_event.is_set():
-            if random.random() < 0.3: # [수정] 20% -> 30% 확률
+            if random.random() < 0.3: 
                 reps = 2
                 print("👂 (경청) 끄덕임 x2")
             else:
@@ -501,7 +495,7 @@ class PressToTalk:
         
         print("👂 경청 모드: 랜덤 끄덕임 스레드 종료.")
 
-    # --- [유지] 핵심 기능 함수들 ---
+    # --- 핵심 기능 함수들 ---
     def _mouth_listener_worker(self):
         """A dedicated thread to listen for mouth events."""
         print("▶ 🔊 Mouth-to-Talk listener thread started.")
@@ -527,7 +521,6 @@ class PressToTalk:
     def _speak_and_subtitle(self, text_data: str | dict):
         """
         TTS 출력과 자막을 문장 단위로 동기화하여 처리합니다.
-        - 말하는 동안 busy_signals를 올려 스스로의 말을 재녹음하는 것을 방지합니다.
         """
         import re
 
@@ -540,26 +533,24 @@ class PressToTalk:
                 if self.subtitle_queue and text_to_display:
                     self.subtitle_queue.put(text_to_display)
                 self.tts.speak(text_data)
-                # dict는 wait() 안 함 (스노링 등 비동기 사운드용)
                 return 
             
             text_to_process = str(text_data)
-            # 문장 분리기: 마침표, 물음표, 느낌표 뒤의 공백을 기준으로 자름
             sentences = re.split(r'(?<=[.!?])\s+', text_to_process)
             sentences = [s.strip() for s in sentences if s.strip()]
 
             if not sentences:
-                if text_to_process.strip(): # 분리 실패 시 통째로 말함
+                if text_to_process.strip():
                     sentences = [text_to_process.strip()]
                 else:
-                    return # 빈 텍스트면 종료
+                    return
 
             for sentence in sentences:
                 if self.subtitle_queue:
                     self.subtitle_queue.put(sentence)
                 
                 self.tts.speak(sentence)
-                self.tts.wait() # 각 문장이 끝날 때까지 기다림
+                self.tts.wait() 
         finally:
             pass
 
@@ -609,13 +600,13 @@ class PressToTalk:
         try:
             self.state.frames_q.put_nowait(indata.copy())
         except queue.Full:
-            pass # 큐가 꽉 차면(녹음 중이 아닐 때) 오디오 데이터를 버림
+            pass 
 
     def _start_recording(self):
         if self.state.recording: return
         if self.emotion_queue:
             self.emotion_queue.put("RESET_SLEEPY_TIMER")
-            self.emotion_queue.put("LISTENING") # [수정] 경청 표정으로
+            self.emotion_queue.put("LISTENING") 
 
         self.last_activity_time = time.time()
         print("✅ User started speaking. Activity timer reset.")
@@ -649,7 +640,7 @@ class PressToTalk:
     def _stop_recording_and_transcribe(self):
         if not self.state.recording: return
         if self.emotion_queue:
-            self.emotion_queue.put("THINKING") # [수정] 생각 표정으로
+            self.emotion_queue.put("THINKING") 
         self.last_activity_time = time.time()
         print("✅ User stopped speaking. Activity timer reset.")
         print("⏹️  녹음 종료, 전사 중...")
@@ -669,7 +660,7 @@ class PressToTalk:
                 
         if not chunks: 
             print("(녹음 데이터가 없습니다.)\n")
-            if self.emotion_queue: self.emotion_queue.put("NEUTRAL") # [추가] 녹음 실패 시 NEUTRAL로
+            if self.emotion_queue: self.emotion_queue.put("NEUTRAL") 
             return
         audio_np = np.concatenate(chunks, axis=0)
         wav_bytes = self._to_wav_bytes(audio_np, SAMPLE_RATE, CHANNELS, DTYPE)
@@ -683,8 +674,6 @@ class PressToTalk:
                 wf.setframerate(samplerate); wf.writeframes(audio_np.tobytes())
             return buf.getvalue()
 
-    # [수정] _route_intent: 이제 _transcribe_then_chat 내부에서 Gemini가 직접 처리하므로 사용 빈도가 줄지만,
-    # 텍스트 기반 fallback을 위해 유지합니다.
     def _route_intent(self, text: str) -> dict:
         try:
             resp = self.router_model.generate_content(text)
@@ -715,7 +704,6 @@ class PressToTalk:
         elif any(w in low_text for w in ["궁금", "생각", "글쎄", "흠.."]): self.emotion_queue.put("THINKING")
         else: self.emotion_queue.put("NEUTRAL")
 
-    # ▼▼▼ [수정] 핵심 최적화: 오디오를 Gemini에게 직접 전송하여 처리 ▼▼▼
     @keep_awake
     def _transcribe_then_chat(self, wav_bytes: bytes):
         self.raise_busy_signal()
@@ -727,8 +715,6 @@ class PressToTalk:
         speak_text = ""
 
         try:
-            # 1. 오디오 데이터를 Gemini Chat 세션에 직접 전송 (JSON 프롬프트와 함께)
-            #    이렇게 하면 STT, 의도 분석, 답변 생성이 1번의 호출로 처리됩니다.
             b64 = base64.b64encode(wav_bytes).decode("ascii")
             current_face_name = self.shared_state.get('current_user_name')
             name_context = f" (카메라를 통해 현재 인식된 사용자 이름: {current_face_name})" if current_face_name else ""
@@ -740,14 +726,10 @@ class PressToTalk:
                 {"inline_data": {"mime_type": "audio/wav", "data": b64}}
             ]
 
-            # 스트리밍 대신 일반 호출 사용 (JSON 구조를 온전히 받기 위함)
-            # 속도가 매우 빠르기 때문에 스트리밍 없이도 충분합니다.
             print(f"[{ts}] [Gemini] 오디오 전송 및 처리 중...")
             response = self.chat.send_message(content_payload)
             
-            # 2. JSON 응답 파싱
             json_text = _extract_text(response)
-            # JSON 마크다운(```json ... ```)이 있을 경우 제거
             json_text = re.sub(r"```json\s*", "", json_text)
             json_text = re.sub(r"```", "", json_text).strip()
             
@@ -755,7 +737,6 @@ class PressToTalk:
                 result = json.loads(json_text)
             except json.JSONDecodeError:
                 print(f"⚠️ JSON 파싱 실패. Raw response: {json_text}")
-                # 파싱 실패 시 전체 텍스트를 답변으로 간주
                 result = {"text": "(음성 인식)", "intent": "chat", "reply": json_text, "name": None}
 
             user_text = result.get("text", "")
@@ -768,32 +749,26 @@ class PressToTalk:
             if current_face_name and current_face_name not in ["Unknown", "Thinking...", None]:
                 low_user_text = user_text.lower()
                 if any(k in low_user_text for k in ["내 이름", "제가 누구", "저 누구"]):
-                    # 답변을 인식된 이름으로 강제 덮어쓰기
                     speak_text = f"당신은 {current_face_name}님이시군요! 이제 제 기억 속에도 확실히 저장되었어요."
-                    intent = "chat" # 의도를 chat으로 강제 변경
+                    intent = "chat" 
                     print(f"💡 이름 질문 감지, 답변을 '{current_face_name}'으로 덮어씀.")
                     pass
 
             print(f"[{ts}] [User] {user_text}")
             print(f"[{ts}] [Intent] {intent}")
             
-            # 3. 의도에 따른 로직 실행
             if intent == "introduction":
-                
-                # 카메라 인식 이름이 유효하면 카메라 이름 우선, 아니면 Gemini 추출 이름 사용
                 target_name = None
                 if current_face_name and current_face_name not in ["Unknown", "Thinking...", None]:
-                     target_name = current_face_name
-                     print(f"💡 자기소개 감지. 카메라 인식 이름 '{target_name}' 우선 사용.")
+                      target_name = current_face_name
+                      print(f"💡 자기소개 감지. 카메라 인식 이름 '{target_name}' 우선 사용.")
                 elif name:
-                     target_name = name
-                     print(f"💡 자기소개 감지. Gemini 추출 이름 '{target_name}' 사용.")
+                      target_name = name
+                      print(f"💡 자기소개 감지. Gemini 추출 이름 '{target_name}' 사용.")
                 
-                # [수정 핵심] 이름이 확보되었을 때만 학습 로직 실행
                 if target_name: 
                     print(f"💡 이름 확보 완료: '{target_name}'. 얼굴 학습 시작.")
                     
-                    # 1. 이름 저장 (프로필 로드 및 Chat 세션 업데이트)
                     self.profile_manager.load_profile_for_chat(target_name)
                     self.shared_state['current_user_name'] = target_name
                     self.last_logged_in_user = target_name
@@ -801,7 +776,6 @@ class PressToTalk:
                     if self.emotion_queue:
                         self.emotion_queue.put("HAPPY")
 
-                    # 2. 멘트 출력 (Gemini 답변 + 학습 가이드)
                     full_greeting_and_guide = (speak_text + " " + "더 잘 기억하기 위해 얼굴을 인식할게요. 10초 동안 카메라를 보시고 얼굴을 위 아래 좌 우로 움직여주세요. 다양한 표정도 좋아요.")
                     self._speak_and_subtitle(full_greeting_and_guide)
 
@@ -810,15 +784,12 @@ class PressToTalk:
                     if self.emotion_queue:
                         self.emotion_queue.put("SCANNING")
 
-                    # 3. [핵심] Face Tracker에게 '집중 학습' 신호 보내기
                     self.shared_state['force_learning'] = True
                     self.shared_state['learning_target_name'] = target_name
                     
-                    # 4. 10초 대기 (이 동안 face.py가 미친듯이 학습함)
                     print("⏳ 10초 얼굴 학습 시작...")
                     time.sleep(10)
                     
-                    # 5. 집중 학습 종료
                     self.shared_state['force_learning'] = False
 
                     if self.emotion_queue:
@@ -826,14 +797,12 @@ class PressToTalk:
 
                     self._speak_and_subtitle("등록이 완료되었습니다! 무엇을 도와드릴까요?")
                     
-                    # Gemini의 초기 답변은 이미 했으므로 비워줍니다.
                     speak_text = ""
                 else:
                     print("⚠️ 'introduction' 의도는 감지되었으나, 유효한 이름이 추출되지 않았습니다. 학습을 건너뜁니다.")
 
             if intent == "dance":
                 print("💡 의도: DANCE START")
-
                 self._speak_and_subtitle("네! 신나게 춤춰볼게요!")
                 speak_text = ""
 
@@ -853,14 +822,13 @@ class PressToTalk:
                 
                 print(f"⏳ 춤추는 중... ({dance_time}초간 음성인식 차단)")
                 time.sleep(dance_time)
-
                 print("✅ 춤 종료 대기 끝, 다시 듣기 모드 전환")
 
             elif intent == "stop":
                 print("💡 의도: STOP")
                 if callable(self.stop_dance_cb): self.stop_dance_cb()
                 if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                speak_text = "" # 멈출 땐 보통 말 없이 멈춤
+                speak_text = "" 
 
             elif intent == "game":
                 print("💡 의도: GAME")
@@ -877,13 +845,11 @@ class PressToTalk:
                 self.entertain_handler.run_joke()
                 speak_text = ""
             
-            # 4. 답변 말하기 (Chat 의도이거나, Dance 등의 멘트가 있을 때)
             if speak_text:
                 print(f"[{ts}] [Gemini Reply] {speak_text}")
                 self._speak_and_subtitle(speak_text)
                 model_text = speak_text
             
-            # 5. 표정 리셋
             if self.emotion_queue and intent == "chat":
                 self.emotion_queue.put("NEUTRAL")
 
@@ -895,19 +861,44 @@ class PressToTalk:
             print("... TTS 대기 ...")
             self.tts.wait()
 
-            # 6. [중요] 실시간 메모리 업데이트 (단기 기억)
-            # Gemini가 직접 처리했으므로 user_text와 model_text가 확보됨
+            # ▼▼▼ [수정] 실시간 저장을 제거하고 메모리 버퍼에만 기록 (속도 향상) ▼▼▼
             if (intent == "chat" or intent == "introduction") and user_text and model_text:
-                 try:
-                    threading.Thread(
-                        target=self.profile_manager.update_summary_after_chat,
-                        args=(user_text, model_text),
-                        daemon=True
-                    ).start()
-                 except Exception as e:
-                    print(f"❌ 프로필 업데이트 오류: {e}")
+                # 기존의 느린 스레드 생성 코드 제거
+                # threading.Thread(target=self.profile_manager.update_summary_after_chat, ...).start()
+                
+                # 메모리에 텍스트로 한 줄 추가 (비용 0에 수렴)
+                log_entry = f"User: {user_text} | Moti: {model_text}"
+                self.session_history.append(log_entry)
+                print(f"📝 대화 메모리 기록 (현재 {len(self.session_history)}턴 쌓임)")
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             self.lower_busy_signal()
+
+    # ▼▼▼ [NEW] 쌓인 대화를 한 번에 저장하는 함수 추가 ▼▼▼
+    def _flush_session_history(self):
+        """쌓인 대화 내용을 한 번에 저장하고 버퍼를 비웁니다."""
+        if not self.session_history:
+            return
+
+        print("💾 대화 세션 종료/전환. 기억을 정리하여 저장합니다...")
+        
+        # 리스트에 있는 대화들을 하나의 긴 텍스트로 합침
+        full_conversation_log = "\n".join(self.session_history)
+        
+        # ProfileManager에게 '배치 저장' 요청 (비동기 처리)
+        # ※ ProfileManager에 'batch_update_summary' 메서드가 있어야 합니다.
+        if hasattr(self.profile_manager, "batch_update_summary"):
+             threading.Thread(
+                target=self.profile_manager.batch_update_summary, 
+                args=(full_conversation_log,),
+                daemon=True
+            ).start()
+        else:
+             print("⚠️ ProfileManager에 batch_update_summary 메서드가 없습니다. (임시 Skip)")
+
+        # 버퍼 초기화
+        self.session_history = []
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     def _on_press(self, key):
         if self.stop_event.is_set(): return False
@@ -955,17 +946,14 @@ class PressToTalk:
         self.last_activity_time = time.time()
         self.listening_enabled.set()
         
-        # is_logged_in_during_initial 플래그 제거 (아래 로직에서 처리)
-        initial_session_active = True # 초기 40초 또는 로그인 후 40초 세션을 관리하는 플래그
-        is_first_login = False # 초기 실행 시 로그인 여부를 추적
+        initial_session_active = True 
+        is_first_login = False 
 
-        # [1단계] 초기 대기 루프 (40초 또는 인식/학습 완료 시 종료)
+        # [1단계] 초기 대기 루프
         while not self.stop_event.is_set() and initial_session_active:
-            # 1-1. 얼굴 인식 및 로그인 처리
             if self.shared_state:
                 detected_name = self.shared_state.get('detected_user')
                 
-                # 아는 사람을 인식했고, 아직 로그인 상태가 아닐 경우 (중요)
                 if detected_name and detected_name not in ["Unknown", "Thinking...", None]:
                     if detected_name != self.last_logged_in_user:
                         print(f"👀 초기 세션 중 사용자 인식됨: {detected_name}. 로그인/학습 시작.")
@@ -977,7 +965,6 @@ class PressToTalk:
                         print("🤖 Gemini에게 맞춤 인사 답변 요청 중...")
 
                         try:
-                            # [인사말 간결화 및 학습 안내 요청 복원]
                             prompt = (
                                 f"사용자 '{detected_name}'님을 방금 인식했어요. 당신이 기억하는 정보를 활용해서 "
                                 f"**1~2문장으로 따뜻하게 인사해주세요.** 그리고 '잠시 얼굴 학습을 시작할게요. 10초 동안 카메라를 봐주세요.'라고 안내해주세요."
@@ -1007,80 +994,55 @@ class PressToTalk:
 
                         self._speak_and_subtitle(f"{detected_name}님, 인식이 완료되었습니다! 이제 대화를 시작해요.")
 
-                        # 1-2. 로그인/학습 성공: 대화 세션 시간 리셋 및 루프 종료 준비
-                        self.listening_enabled.set() # 활성 상태 유지
-                        self.last_activity_time = time.time() # 세션 시간 리셋 (여기서부터 40초)
+                        self.listening_enabled.set() 
+                        self.last_activity_time = time.time() 
 
-                        self.lower_busy_signal() # 작업 완료 후 바쁨 신호 해제
+                        self.lower_busy_signal() 
                         
-                        is_first_login = True # 로그인 성공 플래그
-                        initial_session_active = False # 초기 대기 루프를 종료하고, 다음 단계(대화 유지)로 이동
+                        is_first_login = True 
+                        initial_session_active = False 
                         break 
             
-            # 1-3. 시간 초과 확인
             if time.time() - self.last_activity_time >= 40:
-                initial_session_active = False # 시간 초과
+                initial_session_active = False 
                 
             time.sleep(0.1)
 
         # [2단계] 로그인 후 대화 유지 또는 SLEEPY 전환
 
         if is_first_login or initial_session_active:
-            # A. 로그인 성공 후: is_first_login = True, initial_session_active = False (break로 종료됨)
-            # B. 로그인 없이 40초 이내: is_first_login = False, initial_session_active = True (break 없이 루프를 빠져나오지 않음. 다만, 이 로직은 40초를 보장하기 위해 필요)
-            
-            # A, B 모두 이 시점에서 last_activity_time은 대화가 필요한 시점으로 리셋/설정되어 있습니다.
-
             print("▶ 대화 세션을 유지합니다. (40초 후 비활성화)")
             
-            # 40초 대화 유지 루프 (initial_session_active가 여기서 다시 작동)
-            # is_first_login = True 일 때만 이 루프를 시작하고,
-            # is_first_login = False 일 때는 바로 SLEEPY로 전환되어야 합니다.
-            # 하지만 initial_session_active가 40초 초과 시 False가 되므로, 
-            # is_first_first_login을 확인하는 것이 가장 명확합니다.
-
             if is_first_login:
-                # 로그인 성공 시 40초 대화 유지 루프
                 while not self.stop_event.is_set() and ((self.busy_signals > 0) or (time.time() - self.last_activity_time < 40)):
                     time.sleep(0.1)
                 
-                # 대화 시간이 끝났으므로, SLEEPY 전환 플래그를 설정
                 initial_session_active = False
             
-            # [수정] 로그인 없이 40초 초과 시 (A/B의 B-2 경우)
-            # A/B의 B-1 경우 (40초 초과 없이 break)는 위에서 is_first_login=True 일 때만 발생하므로 문제 없음.
-            # 40초 초과 시 (is_first_login=False, initial_session_active=False)는 바로 아래 SLEEPY 로직으로 이동해야 함.
-
         # [3단계] SLEEPY 전환 (2단계 로직 후 또는 1단계에서 40초 시간 초과 시)
 
-        # 2단계 후 또는 초기 40초가 초과된 경우
         if not self.stop_event.is_set() and not self.listening_enabled.is_set():
-            # [로직 보강] 로그인 성공 시 listening_enabled가 set 되었으므로,
-            # 40초 대화 루프가 끝난 후, 또는 초기 40초가 지나서 listening_enabled가 clear 될 때만 SLEEPY 전환을 시도합니다.
-            
-            # 2단계 (로그인 후 대화 유지)를 통과한 경우, listening_enabled는 아직 set 상태입니다.
-            # 40초가 초과되어 이 로직으로 오면, listening_enabled를 clear하고 SLEEPY로 전환합니다.
-            
-            # is_first_login 플래그를 사용하여 40초 세션이 완료되었는지 확인
             if is_first_login and (time.time() - self.last_activity_time) >= 40:
-                 # 40초 대화 유지 시간이 끝난 후
                  initial_session_active = False
-                 self.listening_enabled.clear() # 여기서 listening_enabled를 확실히 해제
+                 self.listening_enabled.clear() 
                  
             elif not is_first_login and not initial_session_active:
-                 # 초기 40초가 지나서 루프를 빠져나온 경우 (로그인 실패)
-                 self.listening_enabled.clear() # 여기서 listening_enabled를 확실히 해제
+                 self.listening_enabled.clear() 
 
 
         if not self.stop_event.is_set() and not self.listening_enabled.is_set():
             print("▶ 대화 세션 시간 초과. 이제 핫워드 대기 상태로 전환합니다.")
+            
+            # ▼▼▼ [수정] Sleepy 모드 진입 전 대화 내용 저장 ▼▼▼
+            self._flush_session_history()
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
             if self.emotion_queue:
                 self.emotion_queue.put("SLEEPY")
 
         while not self.stop_event.is_set():
             if self.shared_state:
                 detected_name = self.shared_state.get('detected_user')
-                
                 if detected_name and detected_name not in ["Unknown", "Thinking...", None]:
                     if detected_name != self.last_logged_in_user:
                         pass
@@ -1106,6 +1068,10 @@ class PressToTalk:
 
                     if not self.stop_event.is_set():
                         print("▶ 대화 세션 시간 초과. 다시 핫워드 대기 상태로 전환합니다.")
+                        # ▼▼▼ [수정] 세션 종료 시 대화 내용 저장 ▼▼▼
+                        self._flush_session_history()
+                        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+                        
                         self.listening_enabled.clear()
                         if self.emotion_queue:
                             self.emotion_queue.put("SLEEPY")
@@ -1117,6 +1083,11 @@ class PressToTalk:
                 break
         
         print("PTT App 종료 절차 시작...")
+        
+        # ▼▼▼ [수정] 프로그램 종료 시에도 대화 내용 저장 ▼▼▼
+        self._flush_session_history()
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+        
         self.listening_enabled.clear()
         if self.current_listener and self.current_listener.is_alive():
             self.current_listener.stop()
@@ -1125,7 +1096,6 @@ class PressToTalk:
             self.mouth_listener_thread.join(timeout=1.0)
         
         try:
-            # ▼▼▼ [수정] 종료 시 ProfileManager에게 위임 ▼▼▼
             self.profile_manager.save_profile_at_exit()
         except Exception as e:
             print(f"❌ 종료 요약 저장 중 치명적 오류: {e}")
