@@ -50,5 +50,5 @@ logs/*
 #커밋
 
 # --- 사용자 기억 ---
-user_profiles.json
 art_brain.pkl
+user_profiles.json
