@@ -144,7 +144,7 @@ LEFT_HAND_READY_POS = 1864
 SHOULDER_CENTER_POS = 2073
 
 # [안무 2단계] 왼팔 번쩍 들기
-LEFT_ARM_UP_POS = 800      # (값이 작아져야 올라감)
+LEFT_ARM_UP_POS = 1000      # (값이 작아져야 올라감)
 
 # [안무 3단계 & 7단계] 어깨 움직이기
 SHOULDER_LEFT_POS = 2200   # (값이 커져야 왼쪽)
