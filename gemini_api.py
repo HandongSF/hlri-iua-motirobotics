@@ -104,9 +104,10 @@ CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
 MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 
-# [수정] 직접 오디오 처리 시 사용할 프롬프트
+# [수정] 직접 오디오 처리 시 사용할 프롬프트 (Greeting 의도 추가됨)
 ONE_SHOT_PROMPT = (
-    "이 오디오를 전사하고 의도를 분류하며, 'chat' 또는 'introduction' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
+    "이 오디오를 전사하고 의도를 분류하며, 'chat', 'greeting', 'introduction' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
+    "사용자가 '안녕', '반가워' 등 인사를 하면 의도를 'greeting'으로 분류하세요.\n"
     "introduction 의도인 경우 이름을 추출하세요. (다른 의도는 reply를 빈 문자열로, name은 null)\n"
     "오디오 컨텍스트에 인식된 이름이 있고, 사용자가 자신의 이름을 물으면 그 이름을 사용해 답변하세요.\n"
     "반드시 다음 JSON 형식으로만 출력하세요: "
@@ -680,11 +681,17 @@ class PressToTalk:
             raw = _extract_text(resp); data = json.loads(raw)
             if not isinstance(data, dict): raise ValueError("router JSON is not a dict")
             intent = data.get("intent", "chat")
-            if intent not in ("dance", "stop", "game", "chat", "joke", "ox_quiz", "introduction"): intent = "chat"
+            if intent not in ("dance", "stop", "game", "chat", "joke", "ox_quiz", "introduction", "greeting"): intent = "chat"
             return {"intent": intent, "normalized_text": str(data.get("normalized_text", text)), "speakable_reply": str(data.get("speakable_reply", "")) if intent == "chat" else "", "name": data.get("name")}
         except Exception as e:
             print(f"(router 폴백) {e}")
             low = text.lower()
+            
+            # ▼▼▼ [추가] 인사 키워드 감지 ▼▼▼
+            if any(w in low for w in ["안녕", "반가워", "하이", "hello", "hi"]): 
+                return {"intent": "greeting", "normalized_text": text, "speakable_reply": "안녕하세요! 반가워요."}
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
             if any(neg in text for neg in ["하지 마", "하지마", "안돼", "안 돼", "그만두지 마", "멈추지 마"]): return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
             if "그만" in text: return {"intent": "stop", "normalized_text": text, "speakable_reply": ""}
             if "춤" in text: return {"intent": "dance", "normalized_text": text, "speakable_reply": ""}
@@ -696,7 +703,7 @@ class PressToTalk:
     def _analyze_and_send_emotion(self, text: str):
         if not self.emotion_queue or not text: return
         low_text = text.lower()
-        if any(w in low_text for w in ["신나", "재밌", "좋아", "행복", "최고"]): self.emotion_queue.put("HAPPY")
+        if any(w in low_text for w in ["신나", "재밌", "좋아", "행복", "최고", "안녕", "반가", "환영", "어서오"]): self.emotion_queue.put("HAPPY")
         elif any(w in low_text for w in ["놀라운", "놀랐", "깜짝", "세상에"]): self.emotion_queue.put("SURPRISED")
         elif any(w in low_text for w in ["슬퍼", "우울", "힘들", "속상"]): self.emotion_queue.put("SAD")
         elif any(w in low_text for w in ["화나", "짜증", "싫어", "최악"]): self.emotion_queue.put("ANGRY")
@@ -801,7 +808,20 @@ class PressToTalk:
                 else:
                     print("⚠️ 'introduction' 의도는 감지되었으나, 유효한 이름이 추출되지 않았습니다. 학습을 건너뜁니다.")
 
-            if intent == "dance":
+            # ▼▼▼ [추가] 인사(Greeting) 의도 처리 ▼▼▼
+            if intent == "greeting":
+                print("💡 의도: GREETING (인사)")
+                
+                # 1. 인사 동작 실행 (비동기 스레드로 실행하여 말하기와 동시에 움직임)
+                if callable(self.play_greeting_cb):
+                    threading.Thread(target=self.play_greeting_cb, daemon=True).start()
+                
+                # 2. 표정 설정 (HAPPY)
+                if self.emotion_queue: 
+                    self.emotion_queue.put("HAPPY")
+
+
+            elif intent == "dance":
                 print("💡 의도: DANCE START")
                 self._speak_and_subtitle("네! 신나게 춤춰볼게요!")
                 speak_text = ""
@@ -867,7 +887,7 @@ class PressToTalk:
             self.tts.wait()
 
             # ▼▼▼ [수정] 실시간 저장을 제거하고 메모리 버퍼에만 기록 (속도 향상) ▼▼▼
-            if (intent == "chat" or intent == "introduction") and user_text and model_text:
+            if (intent == "chat" or intent == "introduction" or intent == "greeting") and user_text and model_text:
                 # 기존의 느린 스레드 생성 코드 제거
                 # threading.Thread(target=self.profile_manager.update_summary_after_chat, ...).start()
                 

@@ -1,20 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
 # function/face.py
 
 from __future__ import annotations
@@ -30,7 +13,6 @@ from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-# [추가] screeninfo 라이브러리를 가져옵니다. 라이브러리가 없어도 오류가 나지 않도록 try-except로 감싸줍니다.
 try:
     import screeninfo
 except ImportError:
@@ -108,7 +90,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     pan_pos  = home_pan_pos
     tilt_pos = home_tilt_pos
     
-    # [추가] 마지막으로 모터에 전송한 위치를 기억하는 변수
     last_sent_pan = pan_pos
     last_sent_tilt = tilt_pos
 
@@ -116,16 +97,19 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
     # ============================================================
-    #         ↓↓↓ [추가] 얼굴 추적용 가속도 및 속도 설정 ↓↓↓
+    #         ↓↓↓ [수정 1] 실시간 추적을 위해 가속도 끄기 ↓↓↓
     # ============================================================
-    print(f"🤖 추적 모터(Pan/Tilt)에 가속도 및 속도({C.PROFILE_VELOCITY}) 설정...")
+    print(f"🤖 추적 모터(Pan/Tilt) 설정 (반응속도 최우선)...")
     with lock:
-        # 가속도 값을 설정하여 움직임을 부드럽게 만듭니다.
-        # 값이 0이면 급출발/급정거, 값이 높을수록 부드럽게 출발/정지합니다.
-        accel_value = 30 
+        # Tracking 모드에서는 가속도가 있으면 반응이 느려지고 뚝뚝 끊깁니다.
+        # 가속도를 0(무제한)으로 설정하여 PID 제어에 즉각 반응하게 합니다.
+        accel_value = 0 
         
-        io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, C.PROFILE_VELOCITY)
-        io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, C.PROFILE_VELOCITY)
+        # 속도 제한도 해제(0)하거나 매우 높게 주어 PID가 제어하게 합니다.
+        velocity_value = 0 
+        
+        io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, velocity_value)
+        io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, velocity_value)
         
         io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
         io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
@@ -155,8 +139,18 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     MOUTH_OPEN_THRESHOLD = 0.08   
     SPEAKING_TIMEOUT_SEC = 2.0 
     
-    # [FPS 추가] FPS 계산을 위한 이전 시간 초기화
     prev_time = 0
+
+    # ============================================================
+    #      ↓↓↓ [수정 2] 좌표 부드럽게 만들기 (스무딩 변수) ↓↓↓
+    # ============================================================
+    # 이전 좌표를 저장할 변수 (초기값은 화면 중앙)
+    smooth_nx = 1280 // 2
+    smooth_ny = 720 // 2
+    # 스무딩 팩터 (0.0 ~ 1.0): 작을수록 더 부드럽지만 반응이 느려짐
+    # 0.3 ~ 0.5 정도가 적당합니다. 떨림이 심하면 값을 줄이세요.
+    SMOOTH_FACTOR = 0.4 
+    # ============================================================
 
     def get_blendshape_score(blendshape_list, category_name):
         for category in blendshape_list:
@@ -165,7 +159,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         return 0.0
 
     last_recog_time = 0
-    RECOG_INTERVAL = 1 # 1초마다 인식 시도 (과부하 방지)
+    RECOG_INTERVAL = 1
 
     is_initial_recognition_active = True
 
@@ -174,7 +168,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             ok, frame = cap.read()
             if not ok: break
 
-            # [FPS 추가] 시간 측정 및 FPS 계산
             current_time = time.time()
             fps = 0
             if prev_time != 0:
@@ -190,62 +183,41 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     video_frame_q.put_nowait(frame.copy())
             except Exception: pass
             
-            current_mode = shared_state.get('mode', 'tracking') # 현재 모드를 여기서 가져옵니다.
+            current_mode = shared_state.get('mode', 'tracking')
 
             if brain and not sleepy_event.is_set():
-                cur_time = time.time()
-                
-                # 1. 강제 학습 모드인지 확인 (Gemini가 10초간 켜둠)
+                # (기존 Brain 로직 유지)
                 force_learning = shared_state.get('force_learning', False)
                 target_name = shared_state.get('learning_target_name', None)
 
-                # 2. 초기 인식 상태 업데이트
-                # detected_user가 Unknown이 아니거나, 로그인 된 사용자가 있다면 인식 중단
                 if shared_state.get('detected_user') not in ["Unknown", None, "Thinking..."] or shared_state.get('current_user_name') is not None:
                     is_initial_recognition_active = False
 
-
-                # 3. [핵심 수정] RobotBrain 실행 조건
-                #   A. 강제 학습 모드일 때 (최우선)
-                #   B. tracking 모드이고, 초기 인식이 필요하거나, 인식 주기에 도달했을 때
-                
                 is_recognition_needed = (
                     force_learning or 
                     (current_mode == 'tracking' and is_initial_recognition_active)
                 )
 
                 if is_recognition_needed:
-                    
-                    last_recog_time = cur_time
-                    
+                    last_recog_time = time.time()
                     recog_frame = frame.copy()
-                    emb, name = brain.recognize_face(recog_frame) # <-- 고부하 로직 실행
+                    emb, name = brain.recognize_face(recog_frame)
                     
-                    # 상태 공유 및 로그
                     if emb is not None:
                         shared_state['current_face_embedding'] = emb
-                        
-                        # [추가] 초기 인식 기간 동안에는 detected_user를 업데이트하여 PressToTalk의 run() 루프가 로그인 처리하도록 돕습니다.
                         if is_initial_recognition_active and name not in [None, "Unknown", "Thinking..."]:
                             shared_state['detected_user'] = name 
-                            
-                        # [추가] 일반 인식 시 로그 출력 (디버깅용)
                         if not force_learning and print_debug and name != "Thinking...":
                             print(f"👤 [일반 인식] detected_user: {shared_state.get('detected_user')}, ART Result: {name}")
-
                     else:
                         shared_state['current_face_embedding'] = None
                         if is_initial_recognition_active:
                             shared_state['detected_user'] = "Unknown"
                         
-                    # 4. [핵심] 집중 학습 실행 (강제 학습 모드에서만 실행됨)
                     if force_learning and emb is not None and target_name:
-                        # 뇌에 강제 주입 (쿨타임 없음)
                         msg = brain.register_face(emb, target_name)
                         if print_debug:
                             print(f"🔥 [집중 학습 중] {target_name}: {msg}")
-                            
-                        # 화면에 '학습 중' 표시 (UI)
                         cv2.putText(frame, "SCANNING MODE", (10, 100), 
                                      cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
@@ -253,17 +225,15 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             cx, cy = w // 2, h // 2
 
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            
             frame_timestamp_ms = int(time.perf_counter() * 1000)
             res = landmarker.detect_for_video(mp_image, frame_timestamp_ms)
             
-            # --- 입 모양 감지 로직 ---
             if mouth_event_queue and res.face_blendshapes and res.face_blendshapes[0]:
+                # (기존 입모양 인식 로직 유지)
                 bs = res.face_blendshapes[0]
                 mouth_open_score = get_blendshape_score(bs, 'jawOpen')
-      
                 debug_counter += 1
-                if debug_counter % 30 == 0: # 로그 출력 빈도 줄임
+                if debug_counter % 30 == 0: 
                     print(f"👄 Mouth Score: {mouth_open_score:.4f}")
                 
                 is_mouth_currently_open = mouth_open_score > MOUTH_OPEN_THRESHOLD
@@ -274,47 +244,53 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     if not is_speaking_state:
                         print("👄 Mouth open detected, sending START_RECORDING")
                         is_speaking_state = True
-                        try:
-                            mouth_event_queue.put_nowait("START_RECORDING")
+                        try: mouth_event_queue.put_nowait("START_RECORDING")
                         except Exception: pass
                 else:
                     if is_speaking_state and (current_sys_time - last_mouth_open_time > SPEAKING_TIMEOUT_SEC):
                         print("👄 Mouth closed for 2s, sending STOP_RECORDING")
                         is_speaking_state = False
-                        try:
-                            mouth_event_queue.put_nowait("STOP_RECORDING")
+                        try: mouth_event_queue.put_nowait("STOP_RECORDING")
                         except Exception: pass
 
-            # --- 모드 변경 감지 ---
             current_mode = shared_state.get('mode', 'tracking')
 
             if current_mode != last_mode:
+                # (기존 모드 변경 로직 유지)
                 if current_mode == 'ox_quiz':
                     print("▶ Mode changed to OX_QUIZ: Resetting motor position.")
                     pan_pos, tilt_pos = home_pan_pos, home_tilt_pos
                     with lock:
                         io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, pan_pos)
                         io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
-                    last_sent_pan, last_sent_tilt = pan_pos, tilt_pos # 위치 리셋 시 동기화
+                    last_sent_pan, last_sent_tilt = pan_pos, tilt_pos
                 
                 elif current_mode == 'tracking':
                     print("▶ Mode changed to Tracking: Re-reading current motor position.")
                     pan_pos = read_pos(C.PAN_ID)
                     tilt_pos = read_pos(C.TILT_ID)
-                    last_sent_pan, last_sent_tilt = pan_pos, tilt_pos # 위치 리셋 시 동기화
+                    last_sent_pan, last_sent_tilt = pan_pos, tilt_pos
                 last_mode = current_mode
 
-            # --- 얼굴 추적 로직 ---
             if current_mode == 'tracking':
                 if not sleepy_event.is_set():
                     if res.face_landmarks:
                         lm = res.face_landmarks[0][1] # 코 끝 좌표
-                        nx, ny = int(lm.x * w), int(lm.y * h)
+                        raw_nx, raw_ny = int(lm.x * w), int(lm.y * h)
+
+                        # ============================================================
+                        #         ↓↓↓ [수정 3] 좌표 스무딩 적용 ↓↓↓
+                        # ============================================================
+                        # 현재 좌표 = (새 좌표 * 비율) + (이전 좌표 * (1-비율))
+                        smooth_nx = int(raw_nx * SMOOTH_FACTOR + smooth_nx * (1 - SMOOTH_FACTOR))
+                        smooth_ny = int(raw_ny * SMOOTH_FACTOR + smooth_ny * (1 - SMOOTH_FACTOR))
+                        
+                        nx, ny = smooth_nx, smooth_ny # PID 계산에는 부드러운 좌표 사용
+                        # ============================================================
 
                         error_pan = nx - cx
                         error_tilt = cy - ny
 
-                        # PID 제어
                         if abs(error_pan) > C.DEAD_ZONE or abs(error_tilt) > C.DEAD_ZONE:
                             integral_pan += error_pan
                             integral_tilt += error_tilt
@@ -332,15 +308,15 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         last_error_pan = error_pan
                         last_error_tilt = error_tilt
                         
-                        # 목표 위치 계산
                         pan_pos  = int(io.clamp(pan_pos  + C.PAN_SIGN  * pan_delta,  C.SERVO_MIN, C.SERVO_MAX))
                         tilt_pos = int(io.clamp(tilt_pos + C.TILT_SIGN * tilt_delta, C.SERVO_MIN, C.TILT_POS_MAX))
 
-                        # ▼▼▼ [핵심 수정] 미세한 떨림(노이즈) 방지 로직 ▼▼▼
-                        # 계산된 목표 위치와 마지막으로 전송한 위치의 차이가 
-                        # 최소 임계값(MIN_MOVE_DELTA)보다 클 때만 모터에 명령을 보냅니다.
-                        # 이렇게 하면 불필요한 미세 전류 공급을 막아 발열을 줄입니다.
-                        move_threshold = getattr(C, 'MIN_MOVE_DELTA', 5) # config.py에 정의된 값 사용 (기본 5)
+                        # ============================================================
+                        #         ↓↓↓ [수정 4] 최소 이동 임계값 조정 ↓↓↓
+                        # ============================================================
+                        # 가속도를 껐기 때문에 작은 움직임도 즉시 반영해야 부드럽습니다.
+                        # 떨림을 방지하면서 부드럽게 따라가려면 1~2 정도가 적당합니다.
+                        move_threshold = 1 
                         
                         should_move_pan = abs(pan_pos - last_sent_pan) > move_threshold
                         should_move_tilt = abs(tilt_pos - last_sent_tilt) > move_threshold
@@ -349,21 +325,23 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                             with lock:
                                 if should_move_pan:
                                     io.write4(pkt, port, C.PAN_ID, C.ADDR_GOAL_POSITION, pan_pos)
-                                    last_sent_pan = pan_pos # 전송한 위치 업데이트
+                                    last_sent_pan = pan_pos
                                 
                                 if should_move_tilt:
                                     io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, tilt_pos)
-                                    last_sent_tilt = tilt_pos # 전송한 위치 업데이트
-                        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+                                    last_sent_tilt = tilt_pos
+                        # ============================================================
 
                         cv2.circle(frame, (cx, cy), 5, (255, 0, 0), -1)
-                        cv2.circle(frame, (nx, ny), 5, (0, 0, 255), -1)
-                        cv2.putText(frame, "Mode: Tracking", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                        cv2.circle(frame, (nx, ny), 5, (0, 0, 255), -1) # 부드러운 좌표 표시
+                        # 원본 좌표도 옅게 표시 (디버깅용)
+                        cv2.circle(frame, (raw_nx, raw_ny), 3, (0, 255, 255), -1) 
+                        cv2.putText(frame, "Mode: Tracking (Smooth)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 else:
                     cv2.putText(frame, "Mode: Tracking (Sleepy)", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (128, 128, 128), 2)
             
             elif current_mode == 'ox_quiz':
-                # (OX 퀴즈 그래픽 그리기 로직은 기존과 동일)
+                # (OX 퀴즈 로직 유지)
                 left_count, right_count = 0, 0
                 if res.face_landmarks:
                     for face_landmarks in res.face_landmarks:
@@ -407,15 +385,14 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         print(f"🤖 추적 모터(Pan/Tilt) 설정 초기화 (가속도 0, 속도 100)...")
         try:
             with lock:
-                default_velocity = 100 # init.py의 기본 속도
+                default_velocity = 100 
                 io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, default_velocity)
                 io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, default_velocity)
                 
-                io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_ACCELERATION, 0) # 가속도 0 (기본값)
-                io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, 0) # 가속도 0 (기본값)
+                io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_ACCELERATION, 0) 
+                io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_ACCELERATION, 0) 
         except Exception as e:
             print(f"⚠️  추적 모터 설정 초기화 중 오류: {e}")
-        # ============================================================
         
         try: cap.release()
         except Exception: pass
@@ -431,7 +408,6 @@ def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Au
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
         MONITOR_INDEX_FOR_TRIPLE_SETUP = 2
-
         x_pos, y_pos = 0, 0
 
         if screeninfo:
@@ -440,7 +416,6 @@ def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Au
                 num_monitors = len(monitors)
                 
                 target_index = 0
-
                 if num_monitors >= 3:
                     target_index = MONITOR_INDEX_FOR_TRIPLE_SETUP
                     print(f"✅ 카메라: 모니터 {num_monitors}개 감지 -> #{target_index}에 배치 시도")
@@ -464,7 +439,6 @@ def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Au
             print("⚠️ 'screeninfo' 라이브러리가 없어 카메라를 주 모니터에 배치합니다.")
 
         cv2.moveWindow(window_name, x_pos, y_pos)
-        
         print(f"✅ 카메라 창을 좌표 ({x_pos}, {y_pos})에 배치합니다.")
         
         while not stop_event.is_set():
@@ -474,7 +448,6 @@ def display_loop_main_thread(stop_event: threading.Event, window_name: str = "Au
                 continue
             
             cv2.imshow(window_name, frame)
-            
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 stop_event.set(); break
