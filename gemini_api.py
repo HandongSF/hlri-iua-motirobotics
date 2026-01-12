@@ -103,7 +103,7 @@ def keep_awake(func: Callable):
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-3-flash-preview")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 
 ONE_SHOT_PROMPT = (
     "이 오디오를 전사하고 의도를 분류하며, 'chat', 'greeting', 'shy', 'introduction' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
@@ -786,7 +786,19 @@ class PressToTalk:
                     if self.emotion_queue:
                         self.emotion_queue.put("NEUTRAL")
 
-                    self._speak_and_subtitle("등록이 완료되었습니다! 무엇을 도와드릴까요?")
+                    self._speak_and_subtitle("등록이 완료되었습니다! 이제 대화를 시작해요.")
+                    
+                    # [상태 동기화]
+                    self.last_logged_in_user = target_name 
+                    self.shared_state['current_user_name'] = target_name
+
+                    # ▼▼▼ [추가] JSON 파일 강제 저장 (이 부분이 누락되어 있었습니다!) ▼▼▼
+                    try:
+                        # 현재 메모리에 있는 프로필 정보를 JSON 파일로 즉시 씁니다.
+                        self.profile_manager.save_profile_at_exit() 
+                        print(f"💾 [신규 등록] {target_name}님의 프로필을 JSON에 저장했습니다.")
+                    except Exception as e:
+                        print(f"❌ 프로필 저장 실패: {e}")
                     
                     speak_text = ""
                 else:
@@ -1003,85 +1015,94 @@ class PressToTalk:
             if self.shared_state:
                 raw_name = self.shared_state.get('detected_user')
                 
-                # 1. 무언가 감지됨 (Thinking이나 None이 아님)
+                # 1. 무언가 감지됨
                 if raw_name and raw_name not in ["Thinking...", None]:
                     
-                    # ▼▼▼ [안전장치 추가] 인식 안정화 대기 (1.5초) ▼▼▼
-                    # 이유: 인식 초기에는 'Unknown'이었다가 잠시 후 '홍길동'으로 바뀔 수 있으므로
-                    # 즉시 판단하지 않고 잠시 기다립니다.
-                    print(f"👀 얼굴 감지됨('{raw_name}')... 인식이 확실해질 때까지 1.5초 대기합니다.")
-                    time.sleep(1.5) 
+                    # [디버깅] 1차 감지
+                    print(f"👀 1차 감지: '{raw_name}' -> 안정화 대기(0.8초)...")
+                    time.sleep(0.8) 
                     
-                    # 1.5초 후 최종 이름 다시 확인
+                    # 0.8초 후 최종 이름 다시 확인
                     final_name = self.shared_state.get('detected_user')
+                    print(f"👀 2차 감지 결과: '{final_name}'")
+
                     if not final_name or final_name in ["Thinking...", None]:
-                        print("👀 얼굴이 사라졌거나 다시 탐색 중입니다. 대기를 계속합니다.")
-                        continue # 다시 루프 처음으로
+                        print("❌ 대기 중 얼굴을 놓쳤거나 인식 중입니다.")
+                        continue 
                     
                     detected_name = final_name
-                    print(f"✅ 최종 인식 결과: {detected_name}")
-                    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
+                    # 로그인 상태가 바뀌었거나, Unknown인데 아직 이름을 안 물어본 경우
                     if detected_name != self.last_logged_in_user:
-                        print(f"👀 로그인 프로세스 시작: {detected_name}")
-                        self.raise_busy_signal()
                         
-                        # [A] Unknown 사용자: 기존 로직 (무조건 학습)
+                        # [A] Unknown 사용자: 이름을 먼저 물어봄 (학습 X)
                         if detected_name == "Unknown":
-                            print("🤖 Unknown 확정 -> 무조건 학습 시작")
-                            self._speak_and_subtitle("안녕하세요! 처음 뵙네요. 얼굴을 익히기 위해 10초만 학습할게요.")
-                            self.tts.wait()
-                            
-                            if self.emotion_queue: self.emotion_queue.put("SCANNING")
-                            self.shared_state['force_learning'] = True
-                            self.shared_state['learning_target_name'] = "NewUser" 
-                            time.sleep(10)
-                            self.shared_state['force_learning'] = False
-                            
-                            if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                            self._speak_and_subtitle("학습이 완료되었습니다! 대화를 시작할게요.")
+                             if self.last_logged_in_user == "Wait_For_Name":
+                                 # 이미 물어보고 대답 기다리는 중이면 패스
+                                 pass
+                             else:
+                                 print("🤖 Unknown 감지 -> 이름 질문 프로세스")
+                                 self.raise_busy_signal()
+                                 
+                                 self._speak_and_subtitle("안녕하세요! 처음 뵙네요. 성함이 어떻게 되시나요?")
+                                 self.tts.wait()
+                                 
+                                 # 질문했음을 표시 (중복 질문 방지)
+                                 self.last_logged_in_user = "Wait_For_Name"
+                                 self.lower_busy_signal()
 
-                        # [B] Known 사용자 (이미 아는 사람)
+                        # [B] Known 사용자 (이미 아는 사람): 학습 여부 질문
                         else:
-                            print(f"🤖 아는 사람({detected_name}) 확정 -> 학습 여부 물어보기")
-                            self.profile_manager.load_profile_for_chat(detected_name)
-                            self.last_logged_in_user = detected_name
-                            self.shared_state['current_user_name'] = detected_name
-                            
-                            if self.emotion_queue: self.emotion_queue.put("HAPPY")
-                            
-                            # 1. 인사 및 질문
-                            greeting_msg = f"{detected_name}님 안녕하세요! 더 잘 기억할 수 있게 얼굴 인식을 수행할까요?"
-                            self._speak_and_subtitle(greeting_msg)
-                            self.tts.wait()
-
-                            # 2. 답변 대기 (3초)
-                            # 질문이 끝나자마자 대답을 듣기 위해 타임아웃을 넉넉히(4초) 줍니다.
-                            do_learning = self._quick_listen_for_yes_no(timeout=4.0)
-
-                            if do_learning:
-                                # [YES] 학습 수행
-                                if self.emotion_queue: self.emotion_queue.put("SCANNING")
-                                self._speak_and_subtitle(f"{detected_name}님을 더 잘 기억하기 위해 얼굴을 인식할게요. 10초 동안 카메라를 보시고 얼굴을 위 아래 좌 우로 움직여주세요. 다양한 표정도 좋아요.")
-                                self.tts.wait()
-
-                                self.shared_state['force_learning'] = True
-                                self.shared_state['learning_target_name'] = detected_name
-                                time.sleep(10) 
-                                self.shared_state['force_learning'] = False
-                                if self.emotion_queue: 
-                                    self.emotion_queue.put("HAPPY")
-                                self._speak_and_subtitle("얼굴 데이터 업데이트 완료! 이제 대화를 시작해요!")
+                            # 만약 방금 막 학습을 마친 상태(Wait_For_Name -> 실명)라면 인사 건너뛰기
+                            if self.last_logged_in_user == "Wait_For_Name":
+                                 # 방금 통성명하고 학습까지 마쳤으므로 루프 상의 인사는 생략하고
+                                 # 현재 상태만 동기화합니다.
+                                 self.last_logged_in_user = detected_name
                             else:
-                                # [NO] 학습 스킵
-                                if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
-                                self._speak_and_subtitle("네, 바로 대화를 시작할게요.")
+                                print(f"🤖 아는 사람({detected_name}) -> 학습 질문")
+                                self.raise_busy_signal()
+                                
+                                self.profile_manager.load_profile_for_chat(detected_name)
+                                self.last_logged_in_user = detected_name
+                                self.shared_state['current_user_name'] = detected_name
+                                
+                                if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                                
+                                # 1. 인사 및 질문
+                                greeting_msg = f"{detected_name}님 안녕하세요!  {detected_name}님을 더 잘 기억할 수 있게 얼굴 인식을 수행할까요?"
+                                self._speak_and_subtitle(greeting_msg)
                                 self.tts.wait()
 
-                        # --- 공통 종료 처리 ---
+                                # 2. 답변 대기 (4초)
+                                do_learning = self._quick_listen_for_yes_no(timeout=4.0)
+
+                                if do_learning:
+                                    # [YES] 재학습 수행
+                                    if self.emotion_queue: self.emotion_queue.put("SCANNING")
+                                    self._speak_and_subtitle("네! 10초 동안 카메라를 봐주세요.")
+                                    self.tts.wait()
+
+                                    self.shared_state['force_learning'] = True
+                                    self.shared_state['learning_target_name'] = detected_name
+                                    time.sleep(10) 
+                                    self.shared_state['force_learning'] = False
+                                    
+                                    if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                                    self._speak_and_subtitle("얼굴 데이터 업데이트 완료! 이제 대화를 시작해요!")
+                                else:
+                                    # [NO] 학습 스킵
+                                    if self.emotion_queue: self.emotion_queue.put("HAPPY")
+                                    self._speak_and_subtitle("네, 바로 대화를 시작할게요.")
+                                    self.tts.wait()
+                                
+                                self.lower_busy_signal()
+
+                        # --- 공통 종료 처리 (Unknown일 때는 대화 세션만 열어둠) ---
                         self.listening_enabled.set() 
                         self.last_activity_time = time.time() 
-                        self.lower_busy_signal() 
+                        
+                        # Unknown인 경우 루프를 깨지 않고 계속 감시(이름을 알게 될 때까지)할 수도 있지만,
+                        # 여기서는 일단 대화 모드로 넘겨서 사용자의 대답("내 이름은 OOO야")을 듣게 합니다.
                         is_first_login = True 
                         initial_session_active = False 
                         break 

@@ -46,14 +46,14 @@ def _can_show_window_in_this_thread() -> bool:
     return not (_IS_DARWIN and threading.current_thread() is not threading.main_thread())
 
 def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.Lock,
-                         stop_event: threading.Event, video_frame_q: queue.Queue,
-                         sleepy_event: threading.Event,
-                         shared_state: dict,
-                         mouth_event_queue: queue.Queue | None = None,
-                         camera_index: int = 1,
-                         draw_mesh: bool = True,
-                         print_debug: bool = True,
-                         brain: RobotBrain = None):
+                          stop_event: threading.Event, video_frame_q: queue.Queue,
+                          sleepy_event: threading.Event,
+                          shared_state: dict,
+                          mouth_event_queue: queue.Queue | None = None,
+                          camera_index: int = 1,
+                          draw_mesh: bool = True,
+                          print_debug: bool = True,
+                          brain: RobotBrain = None):
 
     cv2, mp = suppress.import_cv2_mp()
 
@@ -97,15 +97,11 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         print(f"▶ Initial(Home) pan={pan_pos}, tilt={tilt_pos}")
 
     # ============================================================
-    #         ↓↓↓ [수정 1] 실시간 추적을 위해 가속도 끄기 ↓↓↓
+    #         ↓↓↓ [설정] 실시간 추적을 위해 가속도 끄기 ↓↓↓
     # ============================================================
     print(f"🤖 추적 모터(Pan/Tilt) 설정 (반응속도 최우선)...")
     with lock:
-        # Tracking 모드에서는 가속도가 있으면 반응이 느려지고 뚝뚝 끊깁니다.
-        # 가속도를 0(무제한)으로 설정하여 PID 제어에 즉각 반응하게 합니다.
         accel_value = 0 
-        
-        # 속도 제한도 해제(0)하거나 매우 높게 주어 PID가 제어하게 합니다.
         velocity_value = 0 
         
         io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, velocity_value)
@@ -142,13 +138,10 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     prev_time = 0
 
     # ============================================================
-    #      ↓↓↓ [수정 2] 좌표 부드럽게 만들기 (스무딩 변수) ↓↓↓
+    #      ↓↓↓ [설정] 좌표 부드럽게 만들기 (스무딩 변수) ↓↓↓
     # ============================================================
-    # 이전 좌표를 저장할 변수 (초기값은 화면 중앙)
     smooth_nx = 1280 // 2
     smooth_ny = 720 // 2
-    # 스무딩 팩터 (0.0 ~ 1.0): 작을수록 더 부드럽지만 반응이 느려짐
-    # 0.3 ~ 0.5 정도가 적당합니다. 떨림이 심하면 값을 줄이세요.
     SMOOTH_FACTOR = 0.4 
     # ============================================================
 
@@ -159,7 +152,10 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
         return 0.0
 
     last_recog_time = 0
-    RECOG_INTERVAL = 1
+    
+    # ▼▼▼ [수정] 인식 주기를 0.5초로 단축하여 반응성 향상 ▼▼▼
+    RECOG_INTERVAL = 0.5 
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     is_initial_recognition_active = True
 
@@ -199,7 +195,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     (current_mode == 'tracking' and is_initial_recognition_active)
                 )
 
-                # ▼▼▼ [수정] 1초(RECOG_INTERVAL)가 지났을 때만 인식 수행 ▼▼▼
                 if is_recognition_needed and (cur_time - last_recog_time >= RECOG_INTERVAL):
                     
                     last_recog_time = cur_time # 마지막 실행 시간 갱신
@@ -208,17 +203,25 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     emb, name = brain.recognize_face(recog_frame)
                     
                     if emb is not None:
+                        # 얼굴이 감지됨
                         shared_state['current_face_embedding'] = emb
-                        if is_initial_recognition_active and name not in [None, "Unknown", "Thinking..."]:
-                            shared_state['detected_user'] = name 
                         
-                        # (로그 출력 빈도 조절)
+                        if is_initial_recognition_active:
+                            # ▼▼▼ [중요 수정] Unknown이어도 업데이트해야 gemini_api가 반응함! ▼▼▼
+                            if name not in [None, "Thinking..."]:
+                                shared_state['detected_user'] = name 
+                            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+                        
+                        # (로그 출력)
                         if not force_learning and print_debug and name != "Thinking...":
                             print(f"👤 [ART 인식] detected_user: {shared_state.get('detected_user')}, 결과: {name}")
                     else:
+                        # 얼굴이 감지되지 않음 (벽, 허공 등)
                         shared_state['current_face_embedding'] = None
                         if is_initial_recognition_active:
-                            shared_state['detected_user'] = "Unknown"
+                            # ▼▼▼ [수정] 아무도 없으면 None으로 설정 (유령 인식 방지) ▼▼▼
+                            shared_state['detected_user'] = None
+                            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
                         
                     if force_learning and emb is not None and target_name:
                         msg = brain.register_face(emb, target_name)
@@ -226,7 +229,6 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                             print(f"🔥 [집중 학습 중] {target_name}: {msg}")
                         cv2.putText(frame, "SCANNING MODE", (10, 100), 
                                      cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             h, w = frame.shape[:2]
             cx, cy = w // 2, h // 2
@@ -286,13 +288,12 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         raw_nx, raw_ny = int(lm.x * w), int(lm.y * h)
 
                         # ============================================================
-                        #         ↓↓↓ [수정 3] 좌표 스무딩 적용 ↓↓↓
+                        #        ↓↓↓ [설정] 좌표 스무딩 적용 ↓↓↓
                         # ============================================================
-                        # 현재 좌표 = (새 좌표 * 비율) + (이전 좌표 * (1-비율))
                         smooth_nx = int(raw_nx * SMOOTH_FACTOR + smooth_nx * (1 - SMOOTH_FACTOR))
                         smooth_ny = int(raw_ny * SMOOTH_FACTOR + smooth_ny * (1 - SMOOTH_FACTOR))
                         
-                        nx, ny = smooth_nx, smooth_ny # PID 계산에는 부드러운 좌표 사용
+                        nx, ny = smooth_nx, smooth_ny 
                         # ============================================================
 
                         error_pan = nx - cx
@@ -319,10 +320,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         tilt_pos = int(io.clamp(tilt_pos + C.TILT_SIGN * tilt_delta, C.SERVO_MIN, C.TILT_POS_MAX))
 
                         # ============================================================
-                        #         ↓↓↓ [수정 4] 최소 이동 임계값 조정 ↓↓↓
+                        #        ↓↓↓ [설정] 최소 이동 임계값 조정 ↓↓↓
                         # ============================================================
-                        # 가속도를 껐기 때문에 작은 움직임도 즉시 반영해야 부드럽습니다.
-                        # 떨림을 방지하면서 부드럽게 따라가려면 1~2 정도가 적당합니다.
                         move_threshold = 1 
                         
                         should_move_pan = abs(pan_pos - last_sent_pan) > move_threshold
