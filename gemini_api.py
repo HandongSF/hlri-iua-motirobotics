@@ -106,9 +106,11 @@ DTYPE = _get_env("DTYPE", "int16")
 MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
 
 ONE_SHOT_PROMPT = (
-    "이 오디오를 전사하고 의도를 분류하며, 'chat', 'greeting', 'shy', 'introduction' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
+    "이 오디오를 전사하고 의도를 분류하며, 'chat', 'greeting', 'shy', 'introduction', 'hug', 'comfort' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
     "사용자가 '안녕', '반가워' 등 인사를 하면 의도를 'greeting'으로 분류하세요.\n"
-    "사용자가 '귀여워', '똑똑해', '멋져', '최고야' 등 칭찬을 하면 의도를 'shy'로 분류하세요.\n"
+    "사용자가 '귀여워', '똑똑해' 등 칭찬을 하면 의도를 'shy'로 분류하세요.\n"
+    "사용자가 '안아줘', '포옹해줘'라고 하면 의도를 'hug'로 분류하세요.\n"
+    "사용자가 '위로받고 싶어', '너무 힘들어', '속상해' 등 위로를 바라는 말을 하면 의도를 'comfort'로 분류하세요.\n" 
     "introduction 의도인 경우 이름을 추출하세요. (다른 의도는 reply를 빈 문자열로, name은 null)\n"
     "오디오 컨텍스트에 인식된 이름이 있고, 사용자가 자신의 이름을 물으면 그 이름을 사용해 답변하세요.\n"
     "반드시 다음 JSON 형식으로만 출력하세요: "
@@ -331,6 +333,7 @@ class PressToTalk:
                  play_left_arm_cb: Optional[Callable[[], None]] = None,
                  play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
                  play_shy_cb: Optional[Callable[[], None]] = None,
+                 play_hug_cb: Optional[Callable[[], None]] = None,
                  emotion_queue: Optional[queue.Queue] = None,
                  subtitle_queue: Optional[multiprocessing.Queue] = None, 
                  hotword_queue: Optional[queue.Queue] = None,
@@ -377,6 +380,7 @@ class PressToTalk:
         self.play_left_arm_cb = play_left_arm_cb
         self.play_wheel_wiggle_cb = play_wheel_wiggle_cb
         self.play_shy_cb = play_shy_cb
+        self.play_hug_cb = play_hug_cb
         self.emotion_queue = emotion_queue
         self.subtitle_queue = subtitle_queue
         self.hotword_queue = hotword_queue
@@ -824,6 +828,54 @@ class PressToTalk:
                 
                 if not speak_text:
                     speak_text = "에헤헤, 부끄러워요. 감사합니다!"
+            
+            elif intent == "hug":
+                print("💡 의도: HUG (포옹 요청)")
+                # 요청대로 표정을 SLEEPY로 설정 (추후 변경 가능)
+                if self.emotion_queue:
+                    self.emotion_queue.put("TENDER") 
+                
+                if callable(self.play_hug_cb):
+                    # 동작은 별도 스레드에서 실행하여 음성 출력과 동시에 진행
+                    threading.Thread(target=self.play_hug_cb, daemon=True).start()
+                
+                if not speak_text:
+                    speak_text = "이리 오세요. 제가 따뜻하게 안아드릴게요."
+
+            elif intent == "comfort":
+                print("💡 의도: COMFORT (위로 요청 -> 포옹 제안)")
+                
+                # 1단계: 위로의 말과 함께 포옹 제안
+                proposal_text = "저런, 많이 힘드셨군요... 제가 안아드려도 될까요?"
+                self._speak_and_subtitle(proposal_text)
+                self.tts.wait()
+
+                # 2단계: Yes/No 듣기 (4초 대기)
+                user_wants_hug = self._quick_listen_for_yes_no(timeout=4.0)
+
+                if user_wants_hug:
+                    # [YES] 포옹 수행
+                    print("💡 답변: YES -> 포옹 수행")
+                    speak_text = "네, 이리 오세요. 토닥토닥..."
+                    
+                    if self.emotion_queue:
+                        self.emotion_queue.put("TENDER") # 요청하신 표정
+                    
+                    if callable(self.play_hug_cb):
+                        threading.Thread(target=self.play_hug_cb, daemon=True).start()
+                else:
+                    # [NO] 말로만 위로
+                    print("💡 답변: NO -> 말로 위로")
+                    # Gemini에게 위로 멘트 생성 요청 (간단히 처리)
+                    try:
+                        comfort_prompt = f"사용자가 '{user_text}'라고 말했어. 포옹은 거절했으니, 따뜻한 말로 짧게 위로해줘."
+                        resp = self.chat.send_message(comfort_prompt)
+                        speak_text = _extract_text(resp)
+                    except:
+                        speak_text = "그렇군요. 항상 옆에서 응원하고 있다는 걸 잊지 마세요. 힘내세요!"
+                    
+                    if self.emotion_queue:
+                        self.emotion_queue.put("TENDER") # 위로 표정
 
             elif intent == "dance":
                 print("💡 의도: DANCE START")
