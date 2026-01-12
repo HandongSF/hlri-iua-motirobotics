@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import json
 import re
+import threading
 import google.generativeai as genai
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
@@ -31,6 +32,12 @@ if TYPE_CHECKING:
 
 from function.utils import _get_relative_time_str, _extract_text, SYSTEM_INSTRUCTION
 
+# ▼▼▼ [수정 1] 절대 경로 사용 (프로젝트 루트 기준) ▼▼▼
+# 이 파일(function/profile_manager.py)의 상위(function)의 상위(project_root) 경로를 구합니다.
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROFILE_DB_FILE = os.path.join(BASE_DIR, "user_profiles.json")
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
 class ProfileManager:
     """
     사용자 프로필(DB) 초기화, 로드, 저장을 전담하는 클래스
@@ -38,34 +45,57 @@ class ProfileManager:
     def __init__(self, ptt_instance: 'PressToTalk'):
         self.ptt = ptt_instance
         self.MODEL_NAME = ptt_instance.MODEL_NAME
+        # 인스턴스 변수로 DB 파일 경로 저장 (절대 경로)
+        self.db_file = PROFILE_DB_FILE
+        self.lock = threading.Lock() # 파일 동시 접근 방지용 Lock
 
     def init_db(self):
         """JSON 프로필 DB 파일이 없으면 빈 객체로 생성합니다."""
-        if not os.path.exists(self.ptt.profile_db_file):
-            print(f"ℹ️ 프로필 DB 파일({self.ptt.profile_db_file})이 없어 새로 생성합니다.")
+        if not os.path.exists(self.db_file):
+            print(f"ℹ️ 프로필 DB 파일({self.db_file})이 없어 새로 생성합니다.")
             try:
-                with open(self.ptt.profile_db_file, "w", encoding="utf-8") as f:
-                    json.dump({}, f)
+                with open(self.db_file, "w", encoding="utf-8") as f:
+                    json.dump({}, f, ensure_ascii=False, indent=4)
             except Exception as e:
                 print(f"❌ 프로필 DB 파일 생성 실패: {e}")
+
+    def _load_all_profiles(self) -> dict:
+        """DB 파일에서 모든 프로필 데이터를 읽어옵니다."""
+        try:
+            if os.path.exists(self.db_file):
+                with open(self.db_file, "r", encoding="utf-8") as f:
+                    try:
+                        return json.load(f)
+                    except json.JSONDecodeError:
+                        return {} # 파일이 깨졌거나 비어있으면 빈 딕셔너리 반환
+            return {}
+        except Exception as e:
+            print(f"❌ 프로필 로드 실패: {e}")
+            return {}
+
+    def _save_to_file(self, data: dict):
+        """딕셔너리 데이터를 DB 파일에 씁니다."""
+        try:
+            with open(self.db_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"❌ 프로필 저장 실패: {e}")
 
     def load_profile_for_chat(self, name: str):
         """
         사용자 이름을 기반으로 '요약된 사실'을 로드하여 시스템 프롬프트에 주입하고,
         Gemini Chat 세션을 새로운 컨텍스트로 재초기화합니다.
         """
+        if not name: return
+
         print(f"⏳ {name}님의 프로필 로드를 시도합니다...")
         
         chat_summary = "아직 기록된 내용이 없습니다."
-        last_seen_str = "기록 없음" # (요약기록용 절대 날짜)
-        relative_time_str = "기록 없음" # (채팅 프롬프트용 상대 날짜)
+        last_seen_str = "기록 없음" 
+        relative_time_str = "기록 없음" 
 
-        try:
-            if os.path.exists(self.ptt.profile_db_file):
-                with open(self.ptt.profile_db_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {}
+        with self.lock:
+            data = self._load_all_profiles()
 
             if name in data:
                 chat_summary = data[name].get("chat_summary", "아직 기록된 내용이 없습니다.")
@@ -76,35 +106,35 @@ class ProfileManager:
                         last_seen_dt_obj = datetime.fromisoformat(last_seen_iso)
                         dt_now = datetime.now()
                         
-                        # 상대 시간 계산
                         relative_time_str = _get_relative_time_str(last_seen_dt_obj, dt_now) 
-                        
-                        # 기존 'last_seen_str'는 종료 시 요약기를 위해 절대 날짜 형식 유지
                         last_seen_str = last_seen_dt_obj.strftime('%Y년 %m월 %d일 %H시 %M분')
                     except ValueError:
-                        pass # 파싱 실패 시 "기록 없음" 유지
+                        pass 
                 
                 print(f"✅ {name}님의 프로필을 성공적으로 로드했습니다. (마지막 대화: {relative_time_str})")
             
             else:
                 print(f"ℹ️ {name}님의 프로필이 없습니다. 새로 생성합니다.")
+                # 신규 사용자라면 즉시 빈 프로필을 생성하여 저장합니다.
+                data[name] = {
+                    "chat_summary": "신규 사용자입니다.",
+                    "last_seen": datetime.now().isoformat()
+                }
+                self._save_to_file(data)
         
-        except Exception as e:
-            print(f"❌ 프로필 로드 실패: {e}")
-
-        # 1. PTT 인스턴스의 초기값 설정 (종료 시 저장 및 실시간 업데이트에 사용)
+        # 1. PTT 인스턴스의 초기값 설정
         self.ptt.current_user_name = name
         self.ptt.initial_chat_summary = chat_summary
         self.ptt.initial_last_seen_str = last_seen_str 
         current_time_str = datetime.now().strftime('%Y년 %m월 %d일 %A')
 
-        # 2. 💡 강화된 시스템 명령어 생성 (Gemini가 사용자를 인지하도록 강제)
+        # 2. 강화된 시스템 명령어 생성
         enhanced_system_instruction = (
             SYSTEM_INSTRUCTION +
             f"\n\n--- 현재 시간 ---\n"
             f"오늘은 {current_time_str}입니다. 이 시간 정보를 바탕으로 '어제', '오늘' 등을 정확히 인지하세요."
             "\n\n--- 중요 기억 (필독!) ---\n"
-            f"당신은 지금 **'{name}'님**과 대화하고 있습니다. **사용자의 이름을 잊지 말고 항상 기억하세요.**\n" # <--- 이름 강조
+            f"당신은 지금 **'{name}'님**과 대화하고 있습니다. **사용자의 이름을 잊지 말고 항상 기억하세요.**\n"
             f"다음은 '{name}'님에 대해 당신이 기억하고 있는 중요한 사실들입니다 ( {relative_time_str} 기준):\n"
             f"{chat_summary}\n"
             "--- 중요 기억 활용 규칙 ---\n"
@@ -117,17 +147,17 @@ class ProfileManager:
             "--- 중요 기억 끝 ---"
         )
         
-        # 3. 💣 Chat 세션을 새 시스템 프롬프트로 재초기화
+        # 3. Chat 세션을 새 시스템 프롬프트로 재초기화
         self.ptt.chat = genai.GenerativeModel(
             self.MODEL_NAME, 
             system_instruction=enhanced_system_instruction
-        ).start_chat(history=[]) # 기존 history는 버리고 새 시작
+        ).start_chat(history=[])
 
         print(f"🧠 Gemini Chat 세션을 {name}님 프로필로 성공적으로 재설정했습니다.")
 
     def batch_update_summary(self, conversation_log: str):
         """
-        [NEW] 쌓여있던 대화 로그 문자열을 한 번에 받아서 요약하고, 프로필(기억)을 업데이트합니다.
+        쌓여있던 대화 로그 문자열을 한 번에 받아서 요약하고, 프로필(기억)을 업데이트합니다.
         대화 세션이 끝날 때(Sleepy 모드 진입, 종료 등) 호출됩니다.
         """
         if not conversation_log or not self.ptt.current_user_name:
@@ -150,33 +180,19 @@ class ProfileManager:
         one_week_ago_str = one_week_ago_dt.strftime('%Y년 %m월 %d일')
 
         try:
-            # 3. 요약기 프롬프트 구성 (강력한 규칙 적용)
+            # 3. 요약기 프롬프트 구성
             summarizer_prompt = (
                 f"당신은 대화 내용을 바탕으로 사용자의 프로필을 관리하는 AI입니다.\n"
                 f"현재 시간은 [ {current_time_str} ]입니다.\n"
                 f"!! 삭제 기준일은 [ {one_week_ago_str} ]입니다. (오늘로부터 1주일 전)\n"
                 f"아래의 [기존 사실] ( {last_seen_str} 기준)을 [이번 세션 전체 대화] ( {current_time_str} 에 종료됨)의 내용으로 업데이트하여, [새로운 사실 목록]을 만드세요.\n\n"
                 "규칙:\n"
-                "1. 대화에서 '사용자'에 대한 '중요한 개인 정보'(이름, 별명, 생일, 연령, 거주지/지역, 선호 언어, 직업/직무, 직장/학교, 전공, 취미, 좋아하는 음식/요리, 식단 제한/알레르기, 건강 목표, 수면 습관, 대화/응답 스타일, 선호 콘텐츠, 최근 감정, 가족/애완동물 정보, 특별한 날짜, 추억 등)만 추출합니다.\n"
-                "2. 단순한 인사나 잡담('안녕', '고마워', '춤 춰')은 무시합니다.\n"
+                "1. 대화에서 '사용자'에 대한 '중요한 개인 정보'만 추출합니다.\n"
+                "2. 단순한 인사나 잡담은 무시합니다.\n"
                 "3. '새로운 사실 목록'은 항상 간결한 불렛 포인트(-)로 작성합니다.\n"
                 "4. [이번 세션 전체 대화]에서 추출할 새 사실이 없다면, [기존 사실]을 (삭제 규칙 적용 후) 그대로 출력합니다.\n"
-                "5. [!!기억 삭제 규칙!!] [기존 사실] 목록을 검토하여, [ {one_week_ago_str} ]보다 날짜가 오래된 (즉, 1주일이 지난) 사실은 [새로운 사실 목록]에서 삭제하세요.\n"
-                " - (예시) [기존 사실]에 '- 2025년 11월 1일 강아지 입양'이라고 적혀있고, 삭제 기준일이 '2025년 11월 10일'이라면, 이 사실은 삭제합니다.\n"
-                " - (예외) 단, 사용자의 이름, 생일, MBTI, 가족/반려동물 이름 등 *절대 변하지 않는 핵심 개인정보*는 1주일이 지났더라도 삭제하지 말고 유지해야 합니다.\n"
-                "6. [!!날짜/사실 분리 규칙!!] 정보의 유형에 따라 날짜 표기법을 엄격히 구분하세요.\n"
-                " A. [영구적 사실]: 사용자의 이름, 선호도(예: '개구리를 싫어함'), 성격, MBTI, 가족/반려동물 이름 등 *시간과 관계없는 사실*은 날짜를 *절대* 붙이지 마세요.\n"
-                "  - (GOOD): '- 거미를 싫어함.'\n"
-                "  - (GOOD): '- 사용자 이름은 홍길동입니다.'\n"
-                " B. [특정 시점 일정/사건]: 시험, 약속, 계획, 과거의 특정 사건(예: '어제 병원 감') 등 *특정 날짜에 발생하는 일*은 [사건 발생일]을 맨 앞에 붙여야 합니다.\n"
-                "  - (현재 시간: 2025년 11월 18일 / 사용자 발화: '목요일에 컴퓨터 시험 봐.')\n"
-                "  - (GOOD): '- 2025년 11월 20일: 컴퓨터 네트워크 시험 예정.'\n"
-                "  - (사용자 발화: '오늘 5시에 공부할 거야.')\n"
-                "  - (GOOD): '- 2025년 11월 18일 17시: 공부 예정.'\n"
-                " C. [현재 지속 상태]: '지금 시험 기간이다', '오늘 피곤하다'처럼 *대화 시점의 일시적인 상태*는 [대화한 날짜]를 기준으로 기록하세요. ('현재', '오늘' 같은 상대어 금지)\n"
-                "  - (현재 시간: 2025년 11월 18일 / 사용자 발화: '나 지금 시험 기간이야.')\n"
-                "  - (BAD): '- 현재 시험 기간임.'\n"
-                "  - (GOOD): '- 2025년 11월 18일 기준, 시험 기간임.'\n"
+                "5. [!!기억 삭제 규칙!!] 1주일이 지난 사실은 삭제하되, 핵심 개인정보(이름, 생일 등)는 유지하세요.\n"
+                "6. [!!날짜/사실 분리 규칙!!] 영구적 사실은 날짜 없음, 특정 시점 사건은 날짜 포함, 상태는 기준일 포함.\n"
                 f"[기존 사실 ( {last_seen_str} 기준)]\n{old_summary}\n\n"
                 f"[이번 세션 전체 대화 ( {current_time_str} 에 종료됨)]\n"
                 f"{conversation_log}\n\n"
@@ -188,21 +204,17 @@ class ProfileManager:
             response = summarizer_model.generate_content(summarizer_prompt)
             new_summary = _extract_text(response)
 
-            # 4. 파일(DB) 저장
-            data = {}
-            if os.path.exists(self.ptt.profile_db_file):
-                with open(self.ptt.profile_db_file, "r", encoding="utf-8") as f:
-                    try: data = json.load(f)
-                    except json.JSONDecodeError: data = {}
-            
-            if name not in data:
-                data[name] = {}
-            
-            data[name]["chat_summary"] = new_summary
-            data[name]["last_seen"] = datetime.now().isoformat()
-
-            with open(self.ptt.profile_db_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
+            # 4. 파일(DB) 저장 (Lock 사용)
+            with self.lock:
+                data = self._load_all_profiles()
+                
+                if name not in data:
+                    data[name] = {}
+                
+                data[name]["chat_summary"] = new_summary
+                data[name]["last_seen"] = datetime.now().isoformat()
+                
+                self._save_to_file(data)
 
             # 5. 메모리(인스턴스) 상태 업데이트
             self.ptt.initial_chat_summary = new_summary
@@ -215,11 +227,27 @@ class ProfileManager:
 
     def save_profile_at_exit(self):
         """
-        프로그램 종료 시 호출되는 함수입니다.
-        gemini_api.py에서 이미 _flush_session_history()를 호출하여
-        데이터를 batch_update_summary로 넘겨주었으므로,
-        이 함수는 추가적인 중복 처리를 하지 않고 로그만 남깁니다.
+        신규 사용자 등록 직후 등, 강제로 현재 프로필을 저장해야 할 때 호출합니다.
+        (batch_update_summary는 대화 로그가 있을 때만 저장하므로, 이름만 등록된 경우 이 함수가 필요합니다.)
         """
-        print("ℹ️ [Exit] 프로필 저장은 batch_update_summary를 통해 처리되었습니다.")
-        # 호환성을 위해 함수는 유지하되, 내부 로직은 비워둡니다.
-        pass
+        current_user = self.ptt.shared_state.get('current_user_name')
+        if not current_user or current_user == "Unknown":
+            return
+
+        print(f"💾 {current_user}님의 기본 프로필(접속기록) 저장을 시도합니다...")
+        
+        with self.lock:
+            data = self._load_all_profiles()
+            
+            # 신규 사용자이거나 정보가 없으면 기본값 생성
+            if current_user not in data:
+                data[current_user] = {
+                    "chat_summary": "신규 등록된 사용자입니다.",
+                    "created_at": datetime.now().isoformat()
+                }
+            
+            # 마지막 접속 시간 갱신
+            data[current_user]['last_seen'] = datetime.now().isoformat()
+            
+            self._save_to_file(data)
+            print(f"✅ {current_user}님의 프로필이 {self.db_file}에 저장되었습니다.")
