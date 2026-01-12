@@ -746,3 +746,129 @@ def play_left_arm_motion(port: PortHandler, pkt: PacketHandler, lock):
     finally:
         with lock:
             io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            
+# mk2/dance.py (기존 코드에 이어서 추가)
+
+def play_shy_motion(port: PortHandler, pkt: PacketHandler, lock: threading.Lock):
+    """
+    (신규) 부끄부끄 동작: 팔을 아래로 모으고 몸을 배배 꼬는 동작
+    """
+    print("🤖 [행동] 부끄부끄(Shy) 동작 시작...")
+
+    # 1. 설정값 정의
+    accel_value = 40        # 부드러운 가속
+    arm_speed = 150         # 천천히 내리기
+    hand_speed = 150        # 천천히 모으기
+    wheel_speed = C.TURN_SPEED_UNITS  # 천천히 이동
+    
+    # 어깨 춤 파라미터 (느리고 부드럽게)
+    shoulder_wiggle_count = 2
+    shoulder_wait = 0.8     # 한 쪽으로 갔다가 머무는 시간
+
+    try:
+        # --- [1단계] 움츠리기 (팔 내리기 + 손 모으기 + 바퀴 이동) ---
+        print("  - 1. 팔 내리고 손 모으면서 오른쪽으로 살짝 이동...")
+        
+        with lock:
+            # 가속도 및 속도 설정
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_VELOCITY, hand_speed)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_VELOCITY, hand_speed)
+
+            # 목표 위치 전송 (동시 수행)
+            # 팔: 아래로 (DOWN_POS가 이미 아래라면 READY_POS보다 더 안쪽이나 아래일 수 있음 확인 필요)
+            # 여기서는 '모으는 느낌'을 위해 ACTION_POS(살짝 위)보다는 DOWN_POS나 READY_POS를 사용하되,
+            # 손을 안쪽으로(ACTION_POS) 모으는 것이 핵심입니다.
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_DOWN_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_DOWN_POS)
+            
+            # 손: 안쪽으로
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_ACTION_POS)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_ACTION_POS)
+            
+            # 고개: 살짝 숙이기 (옵션 - 더 부끄러워 보임)
+            # io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, 3800) 
+
+        # 바퀴: 오른쪽으로 살짝 이동 (몸 비틀기 시뮬레이션)
+        # 0.5초 동안만 이동
+        wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, -C.RIGHT_DIR * wheel_speed)
+        wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, -C.LEFT_DIR * wheel_speed) # 오른쪽 이동은 (우: -, 좌: -) ? 확인 필요.
+        # 기존 코드 참고: 오른쪽 이동 = R(-), L(-) 
+        # (wheel.py의 compute_cmd 로직이나 dance.py의 안무 1단계 참고)
+        # 안무 1단계(왼쪽 회전): R(-), L(+)
+        # 안무 5단계(오른쪽 이동): R(+), L(-)  <-- 이걸로 추정됨.
+        # 따라서 오른쪽 이동:
+        wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, C.RIGHT_DIR * wheel_speed)
+        wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, -C.LEFT_DIR * wheel_speed)
+        
+        time.sleep(0.5) 
+        
+        # 바퀴 정지
+        wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
+        wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
+        
+        # 팔 동작 완료 대기
+        time.sleep(1.0) 
+
+        # --- [2단계] 몸 배배 꼬기 (어깨 춤 느리게) ---
+        print("  - 2. 부끄러워서 몸 배배 꼬기...")
+        
+        with lock:
+            # 어깨 속도 아주 느리게
+            io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_PROFILE_VELOCITY, 100) 
+
+        for i in range(shoulder_wiggle_count):
+            # 왼쪽으로 으쓱
+            with lock:
+                io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_LEFT_POS)
+            time.sleep(shoulder_wait)
+            
+            # 오른쪽으로 으쓱
+            with lock:
+                io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_RIGHT_POS)
+            time.sleep(shoulder_wait)
+
+        # 어깨 중앙 복귀
+        with lock:
+            io.write4(pkt, port, C.SHOULDER_ID, C.ADDR_GOAL_POSITION, C.SHOULDER_CENTER_POS)
+        time.sleep(0.5)
+
+        # --- [3단계] 원위치 복귀 ---
+        print("  - 3. 원위치로 복귀 (바퀴는 왼쪽으로 이동하여 복구)")
+        
+        # 바퀴: 아까 오른쪽으로 갔으니 왼쪽으로 이동하여 복귀
+        wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, -C.RIGHT_DIR * wheel_speed)
+        wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, C.LEFT_DIR * wheel_speed)
+        time.sleep(0.5)
+        wheel.set_wheel_speed(pkt, port, lock, C.RIGHT_ID, 0)
+        wheel.set_wheel_speed(pkt, port, lock, C.LEFT_ID, 0)
+
+        with lock:
+            # 팔/손 원위치
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_READY_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_READY_POS)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+            
+            # 고개 들기 (숙였었다면)
+            # io.write4(pkt, port, C.TILT_ID, C.ADDR_GOAL_POSITION, C.TILT_POS_MAX) # 혹은 초기값
+
+        time.sleep(1.0)
+        print("✅ [행동] 부끄부끄 동작 완료.")
+
+    except Exception as e:
+        print(f"❌ 부끄부끄 동작 중 오류: {e}")
+
+    finally:
+        # 가속도 초기화
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)

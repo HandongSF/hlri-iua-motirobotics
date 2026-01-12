@@ -1,20 +1,3 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
 # function/vision_brain.py
 
 import os
@@ -28,7 +11,7 @@ from insightface.app import FaceAnalysis
 # ==========================================
 RHO = 0.80          # 경계심 (0~1). 높을수록 엄격하게 구분
 ALPHA = 1e-5        # 선택 파라미터
-BETA = 0.1         # 학습률
+BETA = 0.1          # 학습률
 BUFFER_SIZE = 5     # 인식 안정화 버퍼 크기
 VOTE_THRESHOLD = 3  # 투표 임계값
 DB_FILE = "art_brain.pkl"
@@ -85,12 +68,20 @@ class FuzzyART:
         return f"Created new memory for {label}"
 
 class RobotBrain:
-    def __init__(self):
+    def __init__(self, db_path=None, similarity_threshold=None):
+        # (호환성을 위해 인자 추가, 사용은 안 함)
         print("⏳ Vision Brain(InsightFace + FuzzyART) 초기화 중...")
-        # InsightFace (눈) - GPU가 있으면 CUDA, 없으면 CPU 자동 선택
-        self.app = FaceAnalysis(name='buffalo_l', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
         
+        # ▼▼▼ [수정 1] 필요한 모듈만 지정하여 로드 (속도 향상) ▼▼▼
+        # allowed_modules=['detection', 'recognition'] 만 사용
+        self.app = FaceAnalysis(
+            name='buffalo_l', 
+            allowed_modules=['detection', 'recognition'], 
+            providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+        )
+        self.app.prepare(ctx_id=0, det_size=(640, 640))
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
         # Fuzzy ART (뇌)
         self.art = FuzzyART()
         self.load_brain()
@@ -122,6 +113,8 @@ class RobotBrain:
         프레임을 받아 얼굴 벡터를 추출하고, FuzzyART로 누구인지 식별합니다.
         Return: (embedding, predicted_name)
         """
+        # [참고] CPU 모드일 때 여기서 시간이 가장 많이 소요됩니다.
+        # face.py에서 1초에 한 번만 호출하도록 제한했으므로 이제 괜찮을 것입니다.
         faces = self.app.get(frame)
         
         if len(faces) == 0:

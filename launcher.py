@@ -89,6 +89,9 @@ def _graceful_shutdown(port: PortHandler, pkt: PacketHandler, dxl_lock: threadin
 def run_ptt(
     start_dance_cb, stop_dance_cb, play_rps_motion_cb,
     play_greeting_cb, play_both_arms_cb, play_right_arm_cb, play_left_arm_cb, play_wheel_wiggle_cb,
+    # ▼▼▼ [수정 1] 인자 추가: play_shy_cb ▼▼▼
+    play_shy_cb, 
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     emotion_queue, subtitle_queue, hotword_queue, stop_event,
     rps_command_q, rps_result_q, sleepy_event, shared_state,
     ox_command_q, ox_result_q, mouth_event_queue,
@@ -105,6 +108,9 @@ def run_ptt(
             play_right_arm_cb=play_right_arm_cb,
             play_left_arm_cb=play_left_arm_cb,
             play_wheel_wiggle_cb=play_wheel_wiggle_cb,
+            # ▼▼▼ [수정 2] PressToTalk 초기화 시 전달 ▼▼▼
+            play_shy_cb=play_shy_cb,
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
             emotion_queue=emotion_queue,
             subtitle_queue=subtitle_queue,
             hotword_queue=hotword_queue,
@@ -193,11 +199,19 @@ def main():
     play_right_arm = lambda: D.play_right_arm_motion(port, pkt, dxl_lock)
     play_left_arm = lambda: D.play_left_arm_motion(port, pkt, dxl_lock)
     play_wheel_wiggle = lambda: D.play_wheel_wiggle_motion(port, pkt, dxl_lock)
-    perform_head_nod = lambda reps=2: D.perform_head_nod(port, pkt, dxl_lock, repetitions=reps)    
+    perform_head_nod = lambda reps=2: D.perform_head_nod(port, pkt, dxl_lock, repetitions=reps)     
     
+    # ▼▼▼ [수정 3] 부끄부끄 람다 함수 정의 ▼▼▼
+    play_shy = lambda: D.play_shy_motion(port, pkt, dxl_lock)
+    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
     t_ptt = threading.Thread(
         target=run_ptt,
-        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue, perform_head_nod),
+        # ▼▼▼ [수정 4] run_ptt 인자에 play_shy 추가 (순서 주의: play_wheel_wiggle 다음) ▼▼▼
+        args=(start_dance, stop_dance, play_rps_motion, play_greeting, play_both_arms, play_right_arm, play_left_arm, play_wheel_wiggle, 
+              play_shy, # 👈 추가됨
+              emotion_queue, subtitle_q, hotword_queue, stop_event, rps_command_q, rps_result_q, sleepy_event, shared_state, ox_command_q, ox_result_q, mouth_event_queue, perform_head_nod),
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         kwargs={'brain_instance': brain},
         name="ptt", daemon=True)
 
@@ -261,5 +275,5 @@ def main():
         print("■ launcher 정상 종료")
         
 if __name__ == "__main__":  
-    multiprocessing.freeze_support()                                   
+    multiprocessing.freeze_support()                                       
     main()
