@@ -102,12 +102,13 @@ def keep_awake(func: Callable):
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-3-flash-preview")
 
-# [수정] 직접 오디오 처리 시 사용할 프롬프트 (Greeting 의도 추가됨)
+# [수정] 직접 오디오 처리 시 사용할 프롬프트 (Greeting, Shy 의도 추가됨)
 ONE_SHOT_PROMPT = (
-    "이 오디오를 전사하고 의도를 분류하며, 'chat', 'greeting', 'introduction' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
+    "이 오디오를 전사하고 의도를 분류하며, 'chat', 'greeting', 'shy', 'introduction' 의도에 대해서만 1~2문장의 따뜻한 답변을 작성하세요. "
     "사용자가 '안녕', '반가워' 등 인사를 하면 의도를 'greeting'으로 분류하세요.\n"
+    "사용자가 '귀여워', '똑똑해', '멋져', '최고야' 등 칭찬을 하면 의도를 'shy'로 분류하세요.\n"
     "introduction 의도인 경우 이름을 추출하세요. (다른 의도는 reply를 빈 문자열로, name은 null)\n"
     "오디오 컨텍스트에 인식된 이름이 있고, 사용자가 자신의 이름을 물으면 그 이름을 사용해 답변하세요.\n"
     "반드시 다음 JSON 형식으로만 출력하세요: "
@@ -331,6 +332,9 @@ class PressToTalk:
                  play_right_arm_cb: Optional[Callable[[], None]] = None,
                  play_left_arm_cb: Optional[Callable[[], None]] = None,
                  play_wheel_wiggle_cb: Optional[Callable[[], None]] = None,
+                 # ▼▼▼ [추가] 부끄부끄 동작 콜백 ▼▼▼
+                 play_shy_cb: Optional[Callable[[], None]] = None,
+                 # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
                  emotion_queue: Optional[queue.Queue] = None,
                  subtitle_queue: Optional[multiprocessing.Queue] = None, 
                  hotword_queue: Optional[queue.Queue] = None,
@@ -381,6 +385,9 @@ class PressToTalk:
         self.play_right_arm_cb = play_right_arm_cb
         self.play_left_arm_cb = play_left_arm_cb
         self.play_wheel_wiggle_cb = play_wheel_wiggle_cb
+        # ▼▼▼ [추가] 부끄부끄 콜백 저장 ▼▼▼
+        self.play_shy_cb = play_shy_cb
+        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         self.emotion_queue = emotion_queue
         self.subtitle_queue = subtitle_queue
         self.hotword_queue = hotword_queue
@@ -681,7 +688,7 @@ class PressToTalk:
             raw = _extract_text(resp); data = json.loads(raw)
             if not isinstance(data, dict): raise ValueError("router JSON is not a dict")
             intent = data.get("intent", "chat")
-            if intent not in ("dance", "stop", "game", "chat", "joke", "ox_quiz", "introduction", "greeting"): intent = "chat"
+            if intent not in ("dance", "stop", "game", "chat", "joke", "ox_quiz", "introduction", "greeting", "shy"): intent = "chat"
             return {"intent": intent, "normalized_text": str(data.get("normalized_text", text)), "speakable_reply": str(data.get("speakable_reply", "")) if intent == "chat" else "", "name": data.get("name")}
         except Exception as e:
             print(f"(router 폴백) {e}")
@@ -690,6 +697,11 @@ class PressToTalk:
             # ▼▼▼ [추가] 인사 키워드 감지 ▼▼▼
             if any(w in low for w in ["안녕", "반가워", "하이", "hello", "hi"]): 
                 return {"intent": "greeting", "normalized_text": text, "speakable_reply": "안녕하세요! 반가워요."}
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
+
+            # ▼▼▼ [추가] 칭찬(Shy) 키워드 감지 ▼▼▼
+            if any(w in low for w in ["귀여워", "이쁘다", "예쁘다", "똑똑해", "멋져", "잘했어", "천재", "최고야"]):
+                return {"intent": "shy", "normalized_text": text, "speakable_reply": "에헤헤, 부끄러워요."}
             # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             if any(neg in text for neg in ["하지 마", "하지마", "안돼", "안 돼", "그만두지 마", "멈추지 마"]): return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
@@ -707,7 +719,8 @@ class PressToTalk:
         elif any(w in low_text for w in ["놀라운", "놀랐", "깜짝", "세상에"]): self.emotion_queue.put("SURPRISED")
         elif any(w in low_text for w in ["슬퍼", "우울", "힘들", "속상"]): self.emotion_queue.put("SAD")
         elif any(w in low_text for w in ["화나", "짜증", "싫어", "최악"]): self.emotion_queue.put("ANGRY")
-        elif any(w in low_text for w in ["사랑", "다정", "따뜻", "고마워"]): self.emotion_queue.put("TENDER")
+        # ▼▼▼ [수정] TENDER 조건에 "부끄" 키워드 추가 (말할 때 표정 유지용) ▼▼▼
+        elif any(w in low_text for w in ["사랑", "다정", "따뜻", "고마워", "부끄","감사"]): self.emotion_queue.put("TENDER")
         elif any(w in low_text for w in ["궁금", "생각", "글쎄", "흠.."]): self.emotion_queue.put("THINKING")
         else: self.emotion_queue.put("NEUTRAL")
 
@@ -808,18 +821,31 @@ class PressToTalk:
                 else:
                     print("⚠️ 'introduction' 의도는 감지되었으나, 유효한 이름이 추출되지 않았습니다. 학습을 건너뜁니다.")
 
-            # ▼▼▼ [추가] 인사(Greeting) 의도 처리 ▼▼▼
             if intent == "greeting":
                 print("💡 의도: GREETING (인사)")
-                
-                # 1. 인사 동작 실행 (비동기 스레드로 실행하여 말하기와 동시에 움직임)
                 if callable(self.play_greeting_cb):
                     threading.Thread(target=self.play_greeting_cb, daemon=True).start()
-                
-                # 2. 표정 설정 (HAPPY)
                 if self.emotion_queue: 
                     self.emotion_queue.put("HAPPY")
+                if not speak_text:
+                    speak_text = "안녕하세요! 만나서 반가워요."
 
+            # ▼▼▼ [추가] 부끄부끄(Shy) 의도 처리 ▼▼▼
+            elif intent == "shy":
+                print("💡 의도: SHY (부끄부끄)")
+                
+                # 1. 부끄부끄 동작 실행
+                if callable(self.play_shy_cb):
+                    threading.Thread(target=self.play_shy_cb, daemon=True).start()
+                
+                # 2. 표정 설정 (TENDER)
+                if self.emotion_queue:
+                    self.emotion_queue.put("TENDER")
+                
+                # 3. 기본 답변 설정 (Gemini가 비워뒀을 경우)
+                if not speak_text:
+                    speak_text = "에헤헤, 부끄러워요. 감사합니다!"
+            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             elif intent == "dance":
                 print("💡 의도: DANCE START")
@@ -868,9 +894,8 @@ class PressToTalk:
             if speak_text:
                 print(f"[{ts}] [Gemini Reply] {speak_text}")
 
-                # ▼▼▼ [수정] 말하기 직전에 답변 내용(speak_text)을 분석해 표정을 바꿉니다 ▼▼▼
+                # 말하기 직전에 답변 내용을 분석해 표정을 바꿉니다
                 self._analyze_and_send_emotion(speak_text)
-                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
                 self._speak_and_subtitle(speak_text)
                 model_text = speak_text
@@ -886,20 +911,16 @@ class PressToTalk:
             print("... TTS 대기 ...")
             self.tts.wait()
 
-            # ▼▼▼ [수정] 실시간 저장을 제거하고 메모리 버퍼에만 기록 (속도 향상) ▼▼▼
-            if (intent == "chat" or intent == "introduction" or intent == "greeting") and user_text and model_text:
-                # 기존의 느린 스레드 생성 코드 제거
-                # threading.Thread(target=self.profile_manager.update_summary_after_chat, ...).start()
-                
+            # 실시간 저장을 제거하고 메모리 버퍼에만 기록 (속도 향상)
+            if (intent == "chat" or intent == "introduction" or intent == "greeting" or intent == "shy") and user_text and model_text:
                 # 메모리에 텍스트로 한 줄 추가 (비용 0에 수렴)
                 log_entry = f"User: {user_text} | Moti: {model_text}"
                 self.session_history.append(log_entry)
                 print(f"📝 대화 메모리 기록 (현재 {len(self.session_history)}턴 쌓임)")
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             self.lower_busy_signal()
 
-    # ▼▼▼ [NEW] 쌓인 대화를 한 번에 저장하는 함수 추가 ▼▼▼
+    # 쌓인 대화를 한 번에 저장하는 함수
     def _flush_session_history(self):
         """쌓인 대화 내용을 한 번에 저장하고 버퍼를 비웁니다."""
         if not self.session_history:
@@ -907,11 +928,9 @@ class PressToTalk:
 
         print("💾 대화 세션 종료/전환. 기억을 정리하여 저장합니다...")
         
-        # 리스트에 있는 대화들을 하나의 긴 텍스트로 합침
         full_conversation_log = "\n".join(self.session_history)
         
         # ProfileManager에게 '배치 저장' 요청 (비동기 처리)
-        # ※ ProfileManager에 'batch_update_summary' 메서드가 있어야 합니다.
         if hasattr(self.profile_manager, "batch_update_summary"):
              threading.Thread(
                 target=self.profile_manager.batch_update_summary, 
@@ -923,7 +942,6 @@ class PressToTalk:
 
         # 버퍼 초기화
         self.session_history = []
-    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
     def _on_press(self, key):
         if self.stop_event.is_set(): return False
@@ -1058,9 +1076,8 @@ class PressToTalk:
         if not self.stop_event.is_set() and not self.listening_enabled.is_set():
             print("▶ 대화 세션 시간 초과. 이제 핫워드 대기 상태로 전환합니다.")
             
-            # ▼▼▼ [수정] Sleepy 모드 진입 전 대화 내용 저장 ▼▼▼
+            # Sleepy 모드 진입 전 대화 내용 저장
             self._flush_session_history()
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             if self.emotion_queue:
                 self.emotion_queue.put("SLEEPY")
@@ -1093,9 +1110,8 @@ class PressToTalk:
 
                     if not self.stop_event.is_set():
                         print("▶ 대화 세션 시간 초과. 다시 핫워드 대기 상태로 전환합니다.")
-                        # ▼▼▼ [수정] 세션 종료 시 대화 내용 저장 ▼▼▼
+                        # 세션 종료 시 대화 내용 저장
                         self._flush_session_history()
-                        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
                         
                         self.listening_enabled.clear()
                         if self.emotion_queue:
@@ -1109,9 +1125,8 @@ class PressToTalk:
         
         print("PTT App 종료 절차 시작...")
         
-        # ▼▼▼ [수정] 프로그램 종료 시에도 대화 내용 저장 ▼▼▼
+        # 프로그램 종료 시에도 대화 내용 저장
         self._flush_session_history()
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
         
         self.listening_enabled.clear()
         if self.current_listener and self.current_listener.is_alive():

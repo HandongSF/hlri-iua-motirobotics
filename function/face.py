@@ -186,7 +186,8 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
             current_mode = shared_state.get('mode', 'tracking')
 
             if brain and not sleepy_event.is_set():
-                # (기존 Brain 로직 유지)
+                cur_time = time.time() # 현재 시간
+                
                 force_learning = shared_state.get('force_learning', False)
                 target_name = shared_state.get('learning_target_name', None)
 
@@ -198,8 +199,11 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                     (current_mode == 'tracking' and is_initial_recognition_active)
                 )
 
-                if is_recognition_needed:
-                    last_recog_time = time.time()
+                # ▼▼▼ [수정] 1초(RECOG_INTERVAL)가 지났을 때만 인식 수행 ▼▼▼
+                if is_recognition_needed and (cur_time - last_recog_time >= RECOG_INTERVAL):
+                    
+                    last_recog_time = cur_time # 마지막 실행 시간 갱신
+                    
                     recog_frame = frame.copy()
                     emb, name = brain.recognize_face(recog_frame)
                     
@@ -207,8 +211,10 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         shared_state['current_face_embedding'] = emb
                         if is_initial_recognition_active and name not in [None, "Unknown", "Thinking..."]:
                             shared_state['detected_user'] = name 
+                        
+                        # (로그 출력 빈도 조절)
                         if not force_learning and print_debug and name != "Thinking...":
-                            print(f"👤 [일반 인식] detected_user: {shared_state.get('detected_user')}, ART Result: {name}")
+                            print(f"👤 [ART 인식] detected_user: {shared_state.get('detected_user')}, 결과: {name}")
                     else:
                         shared_state['current_face_embedding'] = None
                         if is_initial_recognition_active:
@@ -220,6 +226,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                             print(f"🔥 [집중 학습 중] {target_name}: {msg}")
                         cv2.putText(frame, "SCANNING MODE", (10, 100), 
                                      cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
             h, w = frame.shape[:2]
             cx, cy = w // 2, h // 2
