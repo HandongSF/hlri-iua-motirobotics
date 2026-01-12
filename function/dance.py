@@ -872,3 +872,64 @@ def play_shy_motion(port: PortHandler, pkt: PacketHandler, lock: threading.Lock)
             io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
             io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
             io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+
+def play_hug_motion(port: PortHandler, pkt: PacketHandler, lock: threading.Lock):
+    """
+    (신규) 포옹 동작: 팔을 벌리고 위로 들어올려 사용자를 안아주는 자세를 취함.
+    """
+    print("🤖 [행동] 포옹(Hug) 동작 시작...")
+
+    # 부드러운 포옹을 위한 설정
+    accel_value = 30         # 부드러운 가속
+    arm_speed = 100          # 천천히 벌리기 (감성적)
+    wait_time = 10.0          # 포옹 유지 시간
+
+    try:
+        # 1. 가속도 및 속도 설정 (부드럽게)
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, accel_value)
+            
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_VELOCITY, arm_speed)
+
+        # 2. 팔을 들고 손을 넓게 벌리기
+        print("  - 이리 와요, 안아줄게요. (팔 벌림)")
+        with lock:
+            # 팔은 위로 (TOP_POS)
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_TOP_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_TOP_POS)
+            
+            # 손은 바깥으로 넓게 (WAVE_OUT_POS 이용)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_WAVE_OUT_POS)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_WAVE_OUT_POS)
+
+        # 3. 포옹 자세 유지
+        time.sleep(wait_time)
+
+        # 4. 원위치 복귀
+        print("  - 제자리로...")
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_GOAL_POSITION, C.RIGHT_ARM_READY_POS)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_GOAL_POSITION, C.LEFT_ARM_READY_POS)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_GOAL_POSITION, C.RIGHT_HAND_READY_POS)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_GOAL_POSITION, C.LEFT_HAND_READY_POS)
+        
+        time.sleep(1.5) # 복귀 시간 대기
+
+        print("✅ [행동] 포옹 동작 완료.")
+
+    except Exception as e:
+        print(f"❌ 포옹 동작 중 오류: {e}")
+
+    finally:
+        # 가속도 초기화 (필수)
+        with lock:
+            io.write4(pkt, port, C.RIGHT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_ARM_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.RIGHT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
+            io.write4(pkt, port, C.LEFT_HAND_ID, C.ADDR_PROFILE_ACCELERATION, 0)
