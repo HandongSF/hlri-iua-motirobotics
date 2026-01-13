@@ -37,7 +37,7 @@ class PresentationHandler:
         """안내 방송을 60초마다 반복하는 스레드 워커"""
         # (gemini_api.py에서 _announcement_worker 함수 로직 전체 복사)
         # (모든 self.xxx를 self.ptt.xxx로 변경)
-        announcement_text = "한동의 미남 미녀 여러분 안녕하세요. 잠시만 주목해주세요! 8시부터 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요. "
+        announcement_text = "레드 쇼 참가자 여러분 안녕하세요. 잠시만 주목해주세요! 곧 모티와 함께하는 즐거운 시간이 시작됩니다. 많은 관심과 참여 부탁드려요."
         print("📢 안내 방송 스레드가 시작되었습니다.")
         try:
             while not self.ptt.stop_announcement_event.is_set():
@@ -92,7 +92,7 @@ class PresentationHandler:
                 self.ptt.emotion_queue.put("HAPPY") 
             
             script_part1 = (
-                "안녕하세요, 한동의 미남 미녀 여러분! "
+                "안녕하세요, 레드 쇼 참가자 여러분! "
             )
             self.ptt._speak_and_subtitle(script_part1)
             
@@ -100,7 +100,7 @@ class PresentationHandler:
                 motion_thread = threading.Thread(target=self.ptt.play_both_arms_cb, daemon=True)
                 motion_thread.start()
             
-            self.ptt._speak_and_subtitle("저는 따뜻한 공감이 필요한 여러분을 위해 태어난 공감 서비스 로봇! 모티입니다.")
+            self.ptt._speak_and_subtitle("저는 삶에 지친 여러분을 위해 태어난 재미나고 귀엽고 사랑스러운! 여러분의 감정을 바꿔주는 하찮은 로봇! Fun, Cute, Silly한 로봇 모티입니다.")
             
             
             if callable(self.ptt.play_right_arm_cb):
@@ -111,7 +111,7 @@ class PresentationHandler:
                 self.ptt.emotion_queue.put("SAD")
             
             script_part2 = (
-                "7주차 시험 기간, 다들 정말 고생 많으시죠? "
+                "레드쇼 준비 기간, 다들 정말 고생 많으셨죠?"
             )
             self.ptt._speak_and_subtitle(script_part2)
             
@@ -121,7 +121,7 @@ class PresentationHandler:
             if callable(self.ptt.play_left_arm_cb):
                 threading.Thread(target=self.ptt.play_left_arm_cb, daemon=True).start()
             
-            self.ptt._speak_and_subtitle("밤새 붙잡던 전공 책, 머릿속을 맴도는 공식들... 몸도 마음도 지쳤을 여러분을 보니 저도 마음이 아파요. ")
+            self.ptt._speak_and_subtitle("밤새워 수정하던 코드, 수없이 반복된 테스트... 이번 레드 쇼를 준비하며 치열하게 달려온 여러분을 보니 제 마음이 다 뭉클해요.")
             
             if callable(self.ptt.play_both_arms_cb):
                 motion_thread = threading.Thread(target=self.ptt.play_both_arms_cb, daemon=True)
@@ -207,7 +207,7 @@ class PresentationHandler:
                 motion_thread = threading.Thread(target=self.ptt.play_both_arms_cb, daemon=True)
                 motion_thread.start()
                 
-            self.ptt._speak_and_subtitle("공감서비스 로봇으로서.. 한동대학교 학생 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! ")
+            self.ptt._speak_and_subtitle("공감서비스 로봇으로서.. 레드쇼 참가자 분들의 빅데이터를 딥러닝해서.. 여러분들을 더욱 알아가고자 노력했답니다! ")
             
             if self.ptt.emotion_queue:
                     self.ptt.emotion_queue.put("THINKING")
@@ -215,7 +215,7 @@ class PresentationHandler:
             if callable(self.ptt.play_left_arm_cb):
                 threading.Thread(target=self.ptt.play_left_arm_cb, daemon=True).start()
                 
-            self.ptt._speak_and_subtitle("분석결과, 여러분들은 시험 기간 평균 수면 시간이 4.2시간,")    
+            self.ptt._speak_and_subtitle("분석결과, 여러분들은 개발 준비 기간 평균 수면 시간이 4.2시간,")    
             
             if callable(self.ptt.play_right_arm_cb):
                 threading.Thread(target=self.ptt.play_right_arm_cb, daemon=True).start()
@@ -225,7 +225,7 @@ class PresentationHandler:
             if callable(self.ptt.play_left_arm_cb):
                 threading.Thread(target=self.ptt.play_left_arm_cb, daemon=True).start()
             
-            self.ptt._speak_and_subtitle("그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! ")
+            self.ptt._speak_and_subtitle("그리고 '자고 싶다'는 생각과.. '집가고 싶다'는 생각.. '제대로 쉬고 싶다'는 생각은.. 초당 17.3회 정도 하는 것으로 나타났어요! ")
             
             if callable(self.ptt.play_right_arm_cb):
                 threading.Thread(target=self.ptt.play_right_arm_cb, daemon=True).start()
@@ -237,7 +237,7 @@ class PresentationHandler:
                 motion_thread.start()
             
             script_part7 = (
-                "오석 와이파이 트래픽을 분석해 보니... 공부 관련 자료 다운로드 수보다.. 인스타그램과 에브리타임 새로고침 수가 2.7배 더 많았어요! "
+                "알펜시아 리조트 와이파이 트래픽을 분석해 보니... 레드쇼와 로봇 학회 관련 자료 다운로드 수보다.. 인스타그램 새로고침 수가 2.7배 더 많았어요! "
             )
             self.ptt._speak_and_subtitle(script_part7)
             if self.ptt.emotion_queue:
@@ -248,7 +248,7 @@ class PresentationHandler:
                 motion_thread = threading.Thread(target=self.ptt.play_both_arms_cb, daemon=True)
                 motion_thread.start()
                 
-            self.ptt._speak_and_subtitle("역시 한동대학생 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요? ")
+            self.ptt._speak_and_subtitle("역시 레드쇼 참가자 여러분들은 단순히 지식만 쌓는 게 아니라 트렌드에서도 앞서나가고 계셨군요? ")
             if self.ptt.emotion_queue:
                     self.ptt.emotion_queue.put("HAPPY")
             time.sleep(0.5)
@@ -264,8 +264,8 @@ class PresentationHandler:
                 
             script_part8 = (
                 
-                "딥러닝으로 분석한 결과 여러분들이 세상을 바꾸기위해... 정말 열심히 공부한다는건 명백한 사실이니까요! "
-                "열심히 공부하는 것 만큼 쉴땐 확실히 쉬는것도 중요하다고 생각해요! "
+                "딥러닝으로 분석한 결과 여러분들이 세상을 바꾸기위해... 정말 열심히 로봇을 연구한다는건 명백한 사실이니까요! "
+                "열심히 연구하는 것 만큼 쉴땐 확실히 쉬는것도 중요하다고 생각해요! "
             )
             self.ptt._speak_and_subtitle(script_part8)
             
@@ -291,13 +291,17 @@ class PresentationHandler:
             if callable(self.ptt.play_right_arm_cb):
                 threading.Thread(target=self.ptt.play_right_arm_cb, daemon=True).start()
                 
-            self.ptt._speak_and_subtitle("옆에 있는 개발자가 손으로 신호를 주면...")
+            self.ptt._speak_and_subtitle(
+                "여러분들 저는 가위바위보, OX 퀴즈 게임으로 여러분과 함께 놀 수 있어요! "
+                "또, 재밌는 농담도 저와 나눌 수 있고"
+                "간단한 대화나 포옹 등 사람같이 대화 할 수 있어요!"
+                "무엇보다 저는 춤을 정말 잘 춘답니다!")
             
             if callable(self.ptt.play_both_arms_cb):
                 motion_thread = threading.Thread(target=self.ptt.play_both_arms_cb, daemon=True)
                 motion_thread.start()
                 
-            self.ptt._speak_and_subtitle("여러분의 큰 목소리로... OX게임! 이라고 외쳐주세요!... ")
+            self.ptt._speak_and_subtitle("저와 대화 하고 싶으신 분 놀고 싶으신 분 쉼과 위로를 얻고 싶으신 분들 편하게 다가와주세요!")
 
             print("✅ 진행자 모드 스크립트가 모두 출력되었습니다.")
 
