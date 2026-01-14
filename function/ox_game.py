@@ -1,21 +1,4 @@
-# ============================================================
-#Licensed to the Apache Software Foundation (ASF) under one
-#or more contributor license agreements.  See the NOTICE file
-#distributed with this work for additional information
-#regarding copyright ownership.  The ASF licenses this file
-#to you under the Apache License, Version 2.0 (the
-#"License"); you may not use this file except in compliance
-#with the License.  You may obtain a copy of the License at
-
-#    http://www.apache.org/licenses/LICENSE-2.0
-
-#Unless required by applicable law or agreed to in writing, software
-#distributed under the License is distributed on an "AS IS" BASIS,
-#WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#See the License for the specific language governing permissions and
-#limitations under the License.
-# ============================================================
-# ox_game.py
+# function/ox_game.py
 
 import cv2
 import mediapipe as mp
@@ -28,16 +11,23 @@ from mediapipe.tasks.python import vision
 
 class OxQuizGame:
     """
-    얼굴 위치 기반 OX 퀴즈 게임 워커 클래스.
-    - 정답자가 있으면 다음 라운드를 위해 대기.
-    - 정답자가 없으면 게임 종료.
+    1:1 인터랙티브 OX 퀴즈 & VAD(입모양 인식) 워커
     """
     def __init__(self, command_q: queue.Queue, result_q: queue.Queue, video_frame_q: queue.Queue):
         self.command_q = command_q
         self.result_q = result_q
         self.video_frame_q = video_frame_q
         self.stop_event = threading.Event()
+        
+        # 게임 상태
+        self.current_score = 0
+        self.difficulty = "NORMAL"
 
+        # VAD 설정 (face.py와 동일하게 맞춤)
+        self.MOUTH_OPEN_THRESHOLD = 0.08    # 입 벌림 기준값
+        self.SPEAKING_TIMEOUT_SEC = 2.0     # 입 다물고 대기하는 시간 (말 끝남 판단)
+        
+        # 모델 로딩
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(current_dir)
         model_path = os.path.join(project_root, 'models/face_landmarker.task')
@@ -47,188 +37,248 @@ class OxQuizGame:
             options = vision.FaceLandmarkerOptions(
                 base_options=base_options,
                 running_mode=vision.RunningMode.IMAGE,
-                num_faces=20,
-                min_face_detection_confidence=0.3, # 💡 만약 인식률이 부족하면 이 값을 0.3으로 낮춰보세요.
-                min_face_presence_confidence=0.3,
-                min_tracking_confidence=0.3,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+                output_face_blendshapes=True
             )
             self.landmarker = vision.FaceLandmarker.create_from_options(options)
-            print("✅ OX퀴즈용 얼굴 인식(FaceLandmarker) 모델 로딩 완료.")
+            print("✅ OX퀴즈: 모델 로딩 완료.")
         except Exception as e:
-            print(f"❌ 얼굴 인식 모델 로딩 실패: {e}")
+            print(f"❌ OX퀴즈 모델 로딩 실패: {e}")
             self.landmarker = None
             self.stop_event.set()
 
-    def _run_one_round(self, correct_answer: str) -> dict:
-        """
-        한 라운드의 퀴즈를 진행하고 결과를 반환하는 내부 로직.
-        10초간 얼굴을 인식하여 정답자 수를 계산.
-        """
-        if self.landmarker is None:
-            return {"status": "no_winners"}
+    def _get_blendshape_score(self, blendshape_list, category_name):
+        if not blendshape_list: return 0.0
+        for category in blendshape_list:
+            if category.category_name == category_name:
+                return category.score
+        return 0.0
 
-        print(f"💡 OX퀴즈 라운드 시작! 정답: '{correct_answer}'. 10초 동안 인식합니다.")
+    def _draw_ui(self, frame, msg_top, msg_center=None, timer_ratio=0.0):
+        """공통 UI 그리기"""
+        h, w = frame.shape[:2]
         
-        COUNTING_DURATION = 10
-        end_time = time.time() + COUNTING_DURATION
-        final_left_count, final_right_count = 0, 0
+        # 상단 정보바
+        bar_color = (255, 100, 0)
+        if self.difficulty == "HARD": bar_color = (0, 0, 255)
+        elif self.difficulty == "CRAZY": bar_color = (128, 0, 128)
 
-        while time.time() < end_time and not self.stop_event.is_set():
+        cv2.rectangle(frame, (0, 0), (w, 60), bar_color, -1)
+        info = f"Lv: {self.difficulty} | Score: {self.current_score}"
+        cv2.putText(frame, info, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        
+        # 메시지 (Top)
+        if msg_top:
+            cv2.putText(frame, msg_top, (w//2 - 100, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+
+        # 중앙 메시지 박스
+        if msg_center:
+            text_size = cv2.getTextSize(msg_center, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
+            tx = (w - text_size[0]) // 2
+            ty = h // 2
+            cv2.rectangle(frame, (tx-10, ty-40), (tx+text_size[0]+10, ty+10), (0,0,0), -1)
+            cv2.putText(frame, msg_center, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+
+        # 타이머 바 (하단)
+        if timer_ratio > 0:
+            bar_width = int(w * timer_ratio)
+            cv2.rectangle(frame, (0, h - 20), (bar_width, h), (0, 255, 255), -1)
+
+    def _process_vad_cycle(self, total_timeout=15.0):
+        """
+        [핵심 기능] face.py 스타일의 VAD 로직 수행
+        1. 입 열림 감지 -> START_RECORDING 전송
+        2. 입 닫힘 유지(2초) 감지 -> STOP_RECORDING 전송
+        """
+        print("👄 [VAD] 대화 감지 시작...")
+        
+        start_wait_time = time.time()
+        is_speaking = False
+        last_mouth_open_time = 0
+        
+        while not self.stop_event.is_set():
+            # 전체 타임아웃 체크 (사용자가 아예 말을 안 걸 때)
+            if not is_speaking and (time.time() - start_wait_time > total_timeout):
+                print("⌛ VAD 대기 시간 초과")
+                return False
+
             frame = None
-            while not self.video_frame_q.empty():
-                try:
-                    frame = self.video_frame_q.get_nowait()
-                except queue.Empty:
-                    break
-            
-            if frame is None:
-                time.sleep(0.05)
-                continue
+            try: frame = self.video_frame_q.get_nowait()
+            except queue.Empty: time.sleep(0.05); continue
 
-            # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-            # ✨ [솔루션 2 적용] 이미지 해상도를 1.5배 키워서 인식률을 높입니다.
-            h, w = frame.shape[:2]
-            upscaled_frame = cv2.resize(frame, (int(w * 1.5), int(h * 1.5)), interpolation=cv2.INTER_LINEAR)
+            # 얼굴 분석
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            res = self.landmarker.detect(mp_image)
             
-            # 인식할 때 사용할 프레임의 높이, 너비를 다시 계산합니다.
-            h_up, w_up = upscaled_frame.shape[:2]
-            center_x = w_up // 2
-            
-            left_count, right_count = 0, 0
+            mouth_score = 0.0
+            if res.face_blendshapes and res.face_blendshapes[0]:
+                bs = res.face_blendshapes[0]
+                mouth_score = self._get_blendshape_score(bs, 'jawOpen')
 
-            # 원본 frame 대신 해상도를 높인 upscaled_frame을 모델에 입력합니다.
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(upscaled_frame, cv2.COLOR_BGR2RGB))
-            detection_result = self.landmarker.detect(mp_image)
-            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-            
-            if detection_result.face_landmarks:
-                for face_landmarks in detection_result.face_landmarks:
-                    nose_landmark = face_landmarks[1]
-                    # 좌표 계산 시 커진 이미지의 너비(w_up)를 기준으로 사용해야 합니다.
-                    face_x_position = int(nose_landmark.x * w_up)
+            current_time = time.time()
+            is_mouth_open = mouth_score > self.MOUTH_OPEN_THRESHOLD
+
+            # --- VAD 상태 머신 ---
+            if is_mouth_open:
+                last_mouth_open_time = current_time
+                
+                # 1. 말을 시작함 (Idle -> Speaking)
+                if not is_speaking:
+                    print("👄 입 열림! 녹음 시작 신호 전송")
+                    is_speaking = True
+                    self.result_q.put({"type": "vad_status", "status": "START_RECORDING"})
+
+            else:
+                # 입을 다물고 있는 상태
+                if is_speaking:
+                    # 2. 말을 끝냈는지 체크 (Speaking -> Finished)
+                    silence_duration = current_time - last_mouth_open_time
                     
-                    if face_x_position < center_x:
-                        left_count += 1
-                    else:
-                        right_count += 1
+                    # UI 피드백 (남은 시간 표시)
+                    remain = max(0, self.SPEAKING_TIMEOUT_SEC - silence_duration)
+                    progress = 1.0 - (remain / self.SPEAKING_TIMEOUT_SEC)
+                    msg = f"Listening... {int(progress*100)}%"
+                    self._draw_ui(frame, "Say Yes or No!", msg, progress)
+                    
+                    if silence_duration > self.SPEAKING_TIMEOUT_SEC:
+                        print("👄 2초간 침묵! 녹음 종료 신호 전송")
+                        self.result_q.put({"type": "vad_status", "status": "STOP_RECORDING"})
+                        return True # 사이클 정상 완료
             
-            final_left_count = left_count
-            final_right_count = right_count
-            time.sleep(0.05)
+            # UI (대기 중)
+            if not is_speaking:
+                self._draw_ui(frame, "Waiting for speech...", "Open mouth to answer!")
 
-        # 10초 후 최종 결과 판정
-        winner_count = 0
-        if correct_answer == "O":
-            winner_count = final_right_count
-        elif correct_answer == "X":
-            winner_count = final_left_count
+            # (디버깅용) 얼굴 랜드마크 그리기 등은 생략하거나 필요시 추가
+            time.sleep(0.03)
+            
+        return False
 
-        if winner_count > 0:
-            return {"status": "winners_exist", "winner_count": winner_count}
-        else:
-            return {"status": "no_winners"}
+    def _run_quiz_round(self, correct_answer):
+        """퀴즈 한 라운드 진행 (O/X 선택)"""
+        start_time = time.time()
+        timeout = 10.0
+        lock_in_time = 0
+        current_choice = None 
+        lock_in_duration = 1.5 
 
-    def _run_game_rounds(self, first_answer: str, is_predefined: bool):
-        """
-        여러 라운드로 구성된 게임 전체를 관리하는 메인 루프.
-        """
-        current_answer = first_answer
-        current_is_predefined = is_predefined
-        round_num = 1
+        print(f"🎮 퀴즈 시작! 정답: {correct_answer}")
+        
+        choice_result = None
+        
+        while time.time() - start_time < timeout and not self.stop_event.is_set():
+            frame = None
+            try: frame = self.video_frame_q.get_nowait()
+            except queue.Empty: time.sleep(0.05); continue
 
-        while not self.stop_event.is_set():
-            # 1. 한 라운드 실행
-            round_result = self._run_one_round(current_answer)
-            message = ""
-            winner_count = 0
+            h, w = frame.shape[:2]
+            cx = w // 2
+            
+            # O/X 라인 그리기
+            cv2.line(frame, (cx, 0), (cx, h), (255, 255, 255), 2)
+            cv2.putText(frame, "X", (50, 150), cv2.FONT_HERSHEY_TRIPLEX, 4, (0, 0, 255), 5)
+            cv2.putText(frame, "O", (w - 150, 150), cv2.FONT_HERSHEY_TRIPLEX, 4, (0, 255, 0), 5)
 
-            # 2. 결과 분석 및 메시지 생성
-            if round_result["status"] == "winners_exist" or current_is_predefined:
-                winner_count = round_result.get("winner_count", 0)
-                
-                if current_is_predefined:
-                    message = "계속 진행해볼게요!"
-                elif winner_count == 1:
-                    message = "최후의 승자가 탄생했습니다! 모두 축하의 박수를 보내주세요!"
+            # 얼굴 분석
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            res = self.landmarker.detect(mp_image)
+            
+            detected = False
+            user_x = -1
+            if res.face_landmarks:
+                user_x = int(res.face_landmarks[0][1].x * w)
+                detected = True
+                cv2.circle(frame, (user_x, h//2), 15, (255, 0, 255), -1)
+
+            # 선택 로직
+            status_msg = "Move to O or X!"
+            timer_ratio = 1.0 - ((time.time() - start_time) / timeout)
+            
+            if detected:
+                temp_choice = "X" if user_x < cx else "O"
+                if temp_choice == current_choice:
+                    elapsed = time.time() - lock_in_time
+                    if elapsed >= lock_in_duration:
+                        choice_result = temp_choice
+                        self._draw_ui(frame, "", f"Selected: {temp_choice}!", 1.0)
+                        break # 선택 완료
+                    
+                    progress = elapsed / lock_in_duration
+                    status_msg = f"Holding {temp_choice}... {int(progress*100)}%"
                 else:
-                    message = f"{winner_count}명이 살아남았습니다. 다음 문제 갑니다!"
-            else: # 정답자가 없는 경우
-                message = "아쉽게도 모두 탈락했네요. 다음에 다시 도전해봐요!"
-                winner_count = 0
+                    current_choice = temp_choice
+                    lock_in_time = time.time()
+            else:
+                current_choice = None; lock_in_time = time.time()
+                status_msg = "Face not found!"
 
-            print(f"✅ 라운드 {round_num} 결과: {message}")
-            
-            # 3. 메인 로직으로 결과 전송
-            result_to_send = {
-                "message": message,
-                "winner_count": winner_count,
-                "is_predefined": current_is_predefined
-            }
-            self.result_q.put(result_to_send)
-            
-            # ✨ 4. 게임 종료 여부 판단 (가장 중요한 변경점)
-            if not current_is_predefined and winner_count <= 1:
-                # 실제 게임에서 1명 이하가 남으면 워커의 임무는 끝. 즉시 루프 탈출.
-                break 
+            self._draw_ui(frame, f"Answer: {correct_answer} (Secret)", status_msg, timer_ratio)
+            time.sleep(0.03)
 
-            # ✨ 5. 게임이 계속될 경우에만 다음 명령을 기다림
-            try:
-                print("▶ 다음 문제의 정답과 상태를 기다립니다...")
-                next_command = self.command_q.get(timeout=60.0)
-                
-                if isinstance(next_command, dict) and next_command.get("command") == "NEXT_ROUND":
-                    current_answer = next_command.get("answer")
-                    current_is_predefined = next_command.get("is_predefined", False)
-
-                    if current_answer not in ["O", "X"]:
-                        # ... 오류 처리 ...
-                        break
-                    # ✨ 성공적으로 다음 명령을 받으면, 루프의 처음으로 돌아감 (continue 불필요)
-                else:
-                    # NEXT_ROUND가 아닌 다른 명령이 오면 게임 세션 종료
-                    break
-                
-            except queue.Empty:
-                print("⌛ 다음 명령 타임아웃. 워커를 종료합니다.")
-                break
-            
-            round_num += 1
-        
-        print("🏁 OX 퀴즈 게임 워커 세션 종료.")
-
-
-    def start_worker(self):
-        """워커 스레드를 시작하고 명령을 기다립니다."""
-        print("▶ OX퀴즈(얼굴인식) 워커 대기 중...")
-        while not self.stop_event.is_set():
-            try:
-                # 👈 get_nowait()으로 변경해서 기다리지 않고 바로 확인합니다.
-                command_data = self.command_q.get_nowait() 
-
-                if isinstance(command_data, dict) and command_data.get("command") == "START_OX_QUIZ":
-                    initial_answer = command_data.get("answer")
-                    is_predefined = command_data.get("is_predefined", False)
-
-                    if initial_answer in ["O", "X"]:
-                        self._run_game_rounds(initial_answer, is_predefined)
-                    else:
-                        self.result_q.put("오류: 퀴즈의 정답('O' 또는 'X')이 지정되지 않았습니다.")
-                elif command_data == "STOP":
-                    break
-            except queue.Empty:
-                # 👈 큐가 비어있으면 오류 대신 이 부분이 실행됩니다.
-                # 0.1초만 쉬고 바로 while 루프의 처음으로 돌아갑니다.
-                time.sleep(0.1) 
-                continue
-        
-        if self.landmarker:
-            self.landmarker.close()
-        print("■ OX퀴즈(얼굴인식) 워커 정상 종료")
-        
-    def stop(self):
-        self.stop_event.set()
+        return choice_result
 
 def ox_quiz_game_worker(command_q: queue.Queue, result_q: queue.Queue, video_frame_q: queue.Queue):
-    """OX 퀴즈 게임 워커를 실행하는 함수"""
+    """
+    [워커 메인]
+    1. START_OX_QUIZ -> O/X 게임 진행
+    2. WAIT_FOR_RESPONSE -> VAD 사이클(입 열기->닫기) 진행
+    """
     game = OxQuizGame(command_q, result_q, video_frame_q)
-    game.start_worker()
+    print("▶ OX 워커 실행됨")
+    
+    while not game.stop_event.is_set():
+        try:
+            cmd = command_q.get(timeout=0.1)
+            if isinstance(cmd, dict):
+                c_type = cmd.get("command")
+                
+                if c_type == "START_OX_QUIZ":
+                    # 1. 퀴즈 진행
+                    ans = cmd.get("answer", "O")
+                    
+                    # 난이도 설정
+                    if game.current_score >= 10: game.difficulty = "CRAZY"
+                    elif game.current_score >= 5: game.difficulty = "HARD"
+                    else: game.difficulty = "NORMAL"
+                    
+                    user_choice = game._run_quiz_round(ans)
+                    
+                    is_correct = (user_choice == ans)
+                    if is_correct: game.current_score += 1
+                    
+                    # 다음 난이도 미리 계산
+                    next_diff = "NORMAL"
+                    if game.current_score >= 10: next_diff = "CRAZY"
+                    elif game.current_score >= 5: next_diff = "HARD"
+                    
+                    game.result_q.put({
+                        "type": "quiz_result",
+                        "is_correct": is_correct,
+                        "current_score": game.current_score,
+                        "difficulty": next_diff,
+                        "user_choice": user_choice
+                    })
+
+                elif c_type == "WAIT_FOR_RESPONSE":
+                    # 2. 대답 대기 (VAD 사이클)
+                    # 로봇이 "한 번 더 할래?" 라고 물은 직후 호출됨
+                    print("🗣️ 대답 대기 모드 진입")
+                    success = game._process_vad_cycle(total_timeout=15.0)
+                    
+                    if not success:
+                        # 타임아웃 등으로 실패 시
+                        game.result_q.put({"type": "vad_status", "status": "TIMEOUT"})
+
+                elif c_type == "STOP":
+                    break
+                    
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"❌ 워커 오류: {e}")
+            time.sleep(1)
+
+    if game.landmarker: game.landmarker.close()
