@@ -192,7 +192,7 @@ class EntertainmentHandler:
                         self.ptt.tts.wait()
                         
                 # --- [5] 문제 출제 ---
-                if self.ptt.emotion_queue: self.ptt.emotion_queue.put("THINKING")
+                if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
                 self.ptt._speak_and_subtitle(f"문제! {quiz_data['question']}")
                 self.ptt.tts.wait()
 
@@ -277,88 +277,134 @@ class EntertainmentHandler:
             if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
 
     def run_rps_game(self):
-        """가위바위보 게임 실행 로직 (gemini_api.py에서 이동)"""
-        print("💡 의도: ROCK PAPER SCISSORS GAME")
-        starts_dance = False
-
+        """
+        [수정됨] 스코어 대결 및 무한 모드 가위바위보
+        - 비김: 즉시 재대결 (질문 X)
+        - 승패: 감정 표현(슬픔/기쁨) -> 스코어 안내 -> 재도전 질문
+        """
+        print("💡 의도: RPS GAME (Score & Loop Ver.)")
+        KOREAN_CHOICES = {"Rock": "바위", "Paper": "보", "Scissors": "가위"}
+        
+        # 스코어 초기화
+        user_score = 0
+        robot_score = 0
+        
         try:
-            if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
-            self.ptt._speak_and_subtitle("가위바위보 게임을 시작할게요. 잠시후 당신의 손동작을 보여주세요")
-            time.sleep(1)
-            final_game_result = ""
+            # 1. 게임 시작 멘트
+            if self.ptt.emotion_queue: self.ptt.emotion_queue.put("HAPPY")
+            self.ptt._speak_and_subtitle("가위바위보 대결을 시작할게요. 잠시후 당신의 손동작을 보여주세요. ")
+            self.ptt.tts.wait()
 
-            while True: 
-                if self.ptt.emotion_queue: self.ptt.emotion_queue.put("RESET_SLEEPY_TIMER")
-                self.ptt.rps_command_q.put("START_GAME")
-                if self.ptt.emotion_queue: self.ptt.emotion_queue.put("THINKING")
+            while not self.ptt.stop_event.is_set():
+                # --- [라운드 시작] ---
+                # 로봇 패 미리 결정
+                robot_choice_key = random.choice(["Rock", "Paper", "Scissors"])
+                robot_choice_kr = KOREAN_CHOICES[robot_choice_key]
+
                 self.ptt._speak_and_subtitle("준비하시고...")
-                self.ptt.tts.wait()
-
+                # 준비 동작 (팔 움직임 등)
                 if callable(self.ptt.play_rps_motion_cb):
                     threading.Thread(target=self.ptt.play_rps_motion_cb, daemon=True).start()
-
                 self.ptt._speak_and_subtitle("가위! 바위!")
-                self.ptt._speak_and_subtitle("보!")
+                self.ptt.tts.wait() # "바위" 말할 때까지 대기
+                self.ptt._speak_and_subtitle("보!!")
+                time.sleep(0.3)
+                # --- [결정적 순간] ---
+                # 화면 출력 (이미지) + 비전 인식 시작
+                display_key = f"RPS_{robot_choice_key.upper()}"
+                if self.ptt.emotion_queue: self.ptt.emotion_queue.put(display_key)
+                
+                self.ptt.rps_command_q.put({
+                    "command": "START_GAME", 
+                    "robot_choice": robot_choice_key
+                })
+                time.sleep(0.3)
                 self.ptt.tts.wait()
 
-                game_result = ""
+                # --- [결과 대기] ---
                 try:
-                    game_result = self.ptt.rps_result_q.get(timeout=20)
-                    print(f"게임 결과 수신: {game_result}")
-                
+                    result_data = self.ptt.rps_result_q.get(timeout=5)
                 except queue.Empty:
-                    print("게임 시간 초과. 제스처를 인식하지 못했습니다.")
-                    game_result = "아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요."
+                    # 타임아웃 시
+                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
+                    self.ptt._speak_and_subtitle("너무 늦게 내셨어요! 다시 할게요.")
+                    time.sleep(1.5) # 리셋된 화면을 보여줄 시간 확보
+                    continue
 
-                if "아고! 실수로 눈을" in game_result:
-                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("CLOSE")
-                elif "당신이 이겼어요" in game_result:
-                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("SAD")
-                elif "제가 이겼네요" in game_result:
-                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("HAPPY")
-                elif "비겼네요" in game_result:
+                if result_data.get("status") == "error":
+                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
+                    self.ptt._speak_and_subtitle("손이 잘 안 보였어요. 다시 해볼까요?")
+                    time.sleep(1.5) # 리셋된 화면을 보여줄 시간 확보
+                    continue
+
+                # --- [결과 처리] ---
+                res = result_data["result"]
+                user_choice_kr = KOREAN_CHOICES.get(result_data["user_choice"], "??")
+                
+                print(f"📊 결과: User({user_choice_kr}) vs Robot({robot_choice_kr}) -> {res}")
+
+                # 1. 비긴 경우 -> 즉시 재대결 (질문 없이 continue)
+                if res == "DRAW":
                     if self.ptt.emotion_queue: self.ptt.emotion_queue.put("SURPRISED")
-                    
-                time.sleep(2)
-
-                if "비겼" in game_result:
-                    self.ptt._speak_and_subtitle(f"{game_result} 다시 한 번 할게요!")
-                    self.ptt.tts.wait()                  
-                    time.sleep(2)
-                    continue
-
-                elif "아고! 실수로 눈을" in game_result:
-                    self.ptt._speak_and_subtitle("아고! 실수로 눈을 감아서 인식을 못했어요. 죄송해요. 다시 한 번 할게요!")
-                    self.ptt.tts.wait()                  
-                    time.sleep(2)
-                    continue
-
-                elif "이겼" in game_result:
-                    if "제가 이겼네요"  in game_result:
-                        self.ptt._speak_and_subtitle(f"{game_result} 제가 이겼으니 벌칙을 받아야죠! 저랑 같이 춤춰 주세요")
-                    else:
-                        self.ptt._speak_and_subtitle(f"{game_result} 까비! 벌칙을 피하셨네요. 제가 춤추는거 보여드릴게요.")
-                    
+                    self.ptt._speak_and_subtitle(f"저도 {robot_choice_kr}! 비겼네요! 비겼으니까 바로 다시 해요!")
                     self.ptt.tts.wait()
+                    time.sleep(1) # 잠시 숨 고르기
+                    
+                    # 감정 초기화 후 바로 루프 시작
+                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
+                    time.sleep(1.5)
+                    continue 
 
-                    print("💡 게임 결과에 따라 DANCE START 의도 실행")
+                # 2. 승패가 갈린 경우
+                elif res == "USER_WIN":
+                    user_score += 1
+                    # 사용자가 이기면 -> 로봇은 슬픔 (요청사항 반영)
+                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("SAD") 
+                    self.ptt._speak_and_subtitle(f"당신은 {user_choice_kr}, 저는 {robot_choice_kr}... 으앙 제가 졌어요.")
+                
+                elif res == "ROBOT_WIN":
+                    robot_score += 1
+                    # 사용자가 지면 -> 로봇은 행복 (요청사항 반영)
+                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("HAPPY") 
+                    self.ptt._speak_and_subtitle(f"당신은 {user_choice_kr}, 저는 {robot_choice_kr}! 아싸 제가 이겼어요!")
+                
+                self.ptt.tts.wait()
 
-                    if callable(self.ptt.start_dance_cb):
-                        self.ptt.start_dance_cb()
-                        starts_dance = True
-                    break
-
+                # 3. 스코어 중계 (승패가 났을 때만)
+                score_msg = f"현재 스코어 {user_score} 대 {robot_score}."
+                if user_score > robot_score:
+                    score_msg += " 사용자님이 이기고 계시네요!"
+                elif robot_score > user_score:
+                    score_msg += " 제가 이기고 있어요! 메롱!"
                 else:
-                    self.ptt._speak_and_subtitle("또 하고 싶으시면 '가위바위보'라고 말해주세요.")
-                    break
+                    score_msg += " 동점이에요! 막상막하네요."
+                
+                self.ptt._speak_and_subtitle(score_msg)
+                self.ptt.tts.wait()
+
+                # 4. 재도전 여부 확인 (OX 퀴즈 스타일)
+                self.ptt._speak_and_subtitle("계속 하시겠어요? (응/아니)")
+                self.ptt.tts.wait()
+
+                # 음성 인식 (VAD)
+                wants_more = self.ptt._quick_listen_for_yes_no(timeout=5.0)
+
+                if wants_more:
+                    self.ptt._speak_and_subtitle("좋아요! 덤비세요!")
+                    self.ptt.tts.wait()
+                    if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
+                    time.sleep(1)
+                    continue # 루프 계속
+                else:
+                    self.ptt._speak_and_subtitle(f"네, 좋은 승부였어요! 최종 스코어는 {user_score} 대 {robot_score}입니다.")
+                    self.ptt.tts.wait()
+                    break # 게임 종료
+
+        except Exception as e:
+            print(f"❌ 가위바위보 게임 오류: {e}")
+            self.ptt._speak_and_subtitle("앗, 회로가 엉켰어요. 게임을 종료할게요.")
+        
         finally:
-            if not starts_dance:
-                # raise_busy_signal()은 _transcribe_then_chat에서 호출되었고,
-                # 춤으로 이어지지 않으므로 여기서 lower_busy_signal()을 호출해야 합니다.
-                self.ptt.lower_busy_signal()
-            
-            # model_text는 _transcribe_then_chat의 지역 변수이므로 여기서는 설정하지 않습니다.
-            # final_game_result는 이 함수의 지역 변수이므로 괜찮습니다.
-            print(f"게임 종료. 최종 결과: {final_game_result}")
-            if not starts_dance:
-                if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
+            # 게임 종료 후 정리
+            if self.ptt.emotion_queue: self.ptt.emotion_queue.put("NEUTRAL")
+            self.ptt.lower_busy_signal()

@@ -62,90 +62,91 @@ class RockPaperGame:
         self.MIN_CONFIDENCE_SCORE = 0.7
         self.KOREAN_CHOICES = {"Rock": "바위", "Paper": "보", "Scissors": "가위"}
 
-    def _run_game_logic(self):
-        """실제 게임 한 판을 실행하는 로직"""
-        print("💡 게임 시작 신호 받음. 제스처를 인식합니다.")
+    def _run_game_logic(self, robot_choice_key):
+        """
+        [수정됨] 투표 시스템 도입 (Voting System)
+        - 즉시 종료하지 않고 일정 시간 동안 인식된 제스처를 모음
+        - 가장 많이 나온 제스처를 최종 선택 (주먹->보 전환 과정의 오류 방지)
+        """
+        print(f"💡 [Vision] 판독 시작! 로봇의 패: {robot_choice_key}")
 
-        #--- 게임 시작 전 큐를 비웁니다. ---
+        # 큐 비우기
         while not self.video_frame_q.empty():
-            try:
-                self.video_frame_q.get_nowait()
-            except queue.Empty:
-                break
+            try: self.video_frame_q.get_nowait()
+            except queue.Empty: break
 
-        best_gesture = "None"
-        max_confidence_score = 0.0
-        recognition_started = False
-        start_time = 0
-        end_time = time.time() + 20 # 전체 제한 시간 20초
-
-        while time.time() < end_time and not self.stop_event.is_set():
+        # 투표함 (인식된 동작들을 저장할 리스트)
+        gesture_votes = []
+        
+        start_time = time.time()
+        # [핵심] 1.5초 동안 꾸준히 지켜봄 (즉시 break 하지 않음)
+        COLLECTION_TIME = 1.5 
+        
+        while time.time() - start_time < COLLECTION_TIME and not self.stop_event.is_set():
             try:
-                frame = self.video_frame_q.get(timeout=0.1)
+                frame = self.video_frame_q.get(timeout=0.05)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                recognition_result = self.recognizer.recognize(mp_image)
+                result = self.recognizer.recognize(mp_image)
                 
-                if recognition_result.gestures:
-                    top_gesture = recognition_result.gestures[0][0]
-                    gesture_name = top_gesture.category_name
-                    confidence_score = top_gesture.score
-                    
-                    if self.MIN_CONFIDENCE_SCORE <= confidence_score and gesture_name in ["Victory", "Closed_Fist", "Open_Palm"]:
-                        if not recognition_started:
-                            recognition_started = True
-                            start_time = time.time()
+                if result.gestures:
+                    gesture = result.gestures[0][0]
+                    # 점수가 기준 이상인 것만 투표함에 넣음
+                    if gesture.score > 0.5 and gesture.category_name in ["Victory", "Closed_Fist", "Open_Palm"]:
+                        gesture_votes.append(gesture.category_name)
                         
-                        if confidence_score > max_confidence_score:
-                            best_gesture = gesture_name
-                            max_confidence_score = confidence_score
-                            print(f"[{time.strftime('%H:%M:%S')}] Gesture: {gesture_name}, Score: {confidence_score:.2f}")
-                        else:
-                            print(f"[{time.strftime('%H:%M:%S')}] Gesture: None")
-                                
-                if recognition_started and time.time() - start_time >= 3:
-                    break
             except queue.Empty:
                 continue
 
-        if best_gesture == "None":
-            self.result_q.put("아고! 실수로 눈을 감아 인식을 못했어요. 죄송해요.")
+        # --- [투표 결과 집계] ---
+        if not gesture_votes:
+            # 하나도 인식 못 함
+            self.result_q.put({"status": "error", "msg": "손이 안 보였어요."})
             return
 
-        user_choice_map = {"Victory": "Scissors", "Closed_Fist": "Rock", "Open_Palm": "Paper"}
-        user_choice = user_choice_map.get(best_gesture, "")
-        computer_choice = random.choice(["Rock", "Paper", "Scissors"])
+        # 가장 많이 나온 제스처 찾기 (최빈값)
+        from collections import Counter
+        vote_counts = Counter(gesture_votes)
+        best_gesture = vote_counts.most_common(1)[0][0] # 가장 많이 등장한 제스처
         
-        user_choice_kr = self.KOREAN_CHOICES.get(user_choice, "")
-        computer_choice_kr = self.KOREAN_CHOICES.get(computer_choice, "")
+        print(f"🗳️ 투표 결과: {dict(vote_counts)} -> 최종 선정: {best_gesture}")
 
-        if user_choice == computer_choice:
-            result_text = f"저도 {user_choice_kr}를 냈어요. 비겼네요!"
-        elif (user_choice == "Rock" and computer_choice == "Scissors") or \
-             (user_choice == "Paper" and computer_choice == "Rock") or \
-             (user_choice == "Scissors" and computer_choice == "Paper"):
-            print("사용자: " +user_choice)
-            result_text = f"제가 {computer_choice_kr}를 냈네요. 당신이 이겼어요!"
-        else:
-            print("사용자: " +user_choice)
-            result_text = f"제가 {computer_choice_kr}를 냈어요. 제가 이겼네요!"
+        # 매핑
+        mapping = {"Victory": "Scissors", "Closed_Fist": "Rock", "Open_Palm": "Paper"}
+        user_choice = mapping.get(best_gesture, "Rock")
         
-        self.result_q.put(result_text)
+        # 승패 판정
+        final_result = "DRAW"
+        if user_choice == robot_choice_key:
+            final_result = "DRAW"
+        elif (user_choice == "Rock" and robot_choice_key == "Scissors") or \
+             (user_choice == "Paper" and robot_choice_key == "Rock") or \
+             (user_choice == "Scissors" and robot_choice_key == "Paper"):
+            final_result = "USER_WIN"
+        else:
+            final_result = "ROBOT_WIN"
+
+        # 결과 전송
+        self.result_q.put({
+            "status": "success",
+            "result": final_result,
+            "user_choice": user_choice,
+            "robot_choice": robot_choice_key
+        })
 
     def start_worker(self):
-        """워커 스레드를 시작하고 명령을 기다립니다."""
         print("▶ 가위바위보 워커 대기 중...")
         while not self.stop_event.is_set():
             try:
-                command = self.command_q.get(timeout=1.0)
-                if command == "START_GAME":
-                    self._run_game_logic()
-                elif command == "STOP":
+                msg = self.command_q.get(timeout=1.0)
+                # 딕셔너리 형태의 명령을 받음
+                if isinstance(msg, dict) and msg.get("command") == "START_GAME":
+                    robot_choice = msg.get("robot_choice", "Rock") # 기본값 Rock
+                    self._run_game_logic(robot_choice)
+                elif msg == "STOP":
                     break
             except queue.Empty:
                 continue
-        
         self.recognizer.close()
-        print("■ 가위바위보 워커 정상 종료")
         
     def stop(self):
         self.stop_event.set()

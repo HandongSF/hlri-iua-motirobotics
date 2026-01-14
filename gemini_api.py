@@ -103,7 +103,7 @@ def keep_awake(func: Callable):
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-3-flash-preview")
 
 ONE_SHOT_PROMPT = (
     "이 오디오를 전사하고 의도를 분류하며, 다음 의도 가이드라인을 따르세요.\n"
