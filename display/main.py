@@ -42,6 +42,10 @@ from .emotions.sleepy import Emotion as SleepyEmotion
 from .emotions.wake import Emotion as WakeEmotion
 from .emotions.close import Emotion as CloseEmotion
 from .emotions.scanning import Emotion as ScanningEmotion
+# display/main.py 상단 import 부분에 추가
+from .emotions.rps_rock import Emotion as RpsRockEmotion
+from .emotions.rps_paper import Emotion as RpsPaperEmotion
+from .emotions.rps_scissors import Emotion as RpsScissorsEmotion
 from .emotions import eyebrow
 from .emotions import cheeks
 from dotenv import load_dotenv
@@ -109,7 +113,10 @@ class RobotFaceApp:
             "TENDER": TenderEmotion(), "SCARED": ScaredEmotion(), "ANGRY": AngryEmotion(), 
             "SAD": SadEmotion(), "SURPRISED": SurprisedEmotion(), "LISTENING": ListeningEmotion(),
             "THINKING": ThinkingEmotion(), "SLEEPY": SleepyEmotion(), "WAKE": WakeEmotion(), 
-            "CLOSE": CloseEmotion(), "SCANNING": ScanningEmotion()
+            "CLOSE": CloseEmotion(), "SCANNING": ScanningEmotion(),
+            "RPS_ROCK": RpsRockEmotion(),
+            "RPS_PAPER": RpsPaperEmotion(),
+            "RPS_SCISSORS": RpsScissorsEmotion()
         }
         self.current_emotion_key = "NEUTRAL"
 
