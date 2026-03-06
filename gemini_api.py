@@ -103,7 +103,7 @@ def keep_awake(func: Callable):
 SAMPLE_RATE = int(_get_env("SAMPLE_RATE", "16000"))
 CHANNELS = int(_get_env("CHANNELS", "1"))
 DTYPE = _get_env("DTYPE", "int16")
-MODEL_NAME = _get_env("MODEL_NAME", "gemini-2.5-flash")
+MODEL_NAME = _get_env("MODEL_NAME", "gemini-3.1-flash-lite-preview")
 
 ONE_SHOT_PROMPT = (
     "이 오디오를 전사하고 의도를 분류하며, 다음 의도 가이드라인을 따르세요.\n"
@@ -743,7 +743,10 @@ class PressToTalk:
                     "의도(예: '내 이름은 ~야')를 보인 게 아니라면 절대 'introduction'으로 분류하지 말고 'chat'으로 두세요."
                 )
 
+            current_time_str = datetime.now().strftime("%Y년 %m월 %d일 %p %I시 %M분").replace("AM", "오전").replace("PM", "오후")
+
             prompt = (
+                f"현재 시간: {current_time_str}\n"
                 f"현재 카메라 앞 사용자: {current_face_name}{situation_hint}\n"
                 "첨부된 오디오를 듣고 다음 태그 규칙을 반드시 지켜서 순서대로 출력해.\n"
                 "1. [INTENT]의도[/INTENT] (목록: 'greeting', 'shy', 'hug', 'comfort', 'introduction', 'ox_quiz', 'game', 'joke', 'dance', 'stop', 'chat' 중 택 1)\n"
@@ -782,6 +785,7 @@ class PressToTalk:
                         if user_match: user_text = user_match.group(1).strip()
                         extracted_name = name_match.group(1).strip() if name_match else None
                         
+                        ts_receive = datetime.now().strftime("%H:%M:%S")
                         print(f"[{ts}] [User] {user_text}")
                         print(f"[{ts}] [Intent] {intent}")
                         if extracted_name: print(f"[{ts}] [Name] {extracted_name}")
@@ -932,6 +936,7 @@ class PressToTalk:
     def _flush_session_history(self):
         """쌓인 대화 내용을 한 번에 저장하고 버퍼를 비웁니다."""
         if not self.session_history:
+            self.chat = genai.GenerativeModel(self.MODEL_NAME, system_instruction=SYSTEM_INSTRUCTION).start_chat(history=[])
             return
 
         print("💾 대화 세션 종료/전환. 기억을 정리하여 저장합니다...")
@@ -948,8 +953,10 @@ class PressToTalk:
              print("⚠️ ProfileManager에 batch_update_summary 메서드가 없습니다. (임시 Skip)")
 
         self.session_history = []
+
+        self.chat = genai.GenerativeModel(self.MODEL_NAME, system_instruction=SYSTEM_INSTRUCTION).start_chat(history=[])
+        print("🧹 Gemini 단기 기억 초기화 완료 (다음 응답 속도 최적화)")
     
-    # ▼▼▼ [NEW] 짧게 듣고 네/아니오 판단하는 함수 ▼▼▼
     def _quick_listen_for_yes_no(self, timeout=3.0) -> bool:
         """
         3초간 음성을 듣고 '네(긍정)'인지 '아니오(부정)'인지 판단합니다.
@@ -1181,22 +1188,19 @@ class PressToTalk:
             
         # [3단계] SLEEPY 전환 (2단계 로직 후 또는 1단계에서 40초 시간 초과 시)
 
-        if not self.stop_event.is_set() and not self.listening_enabled.is_set():
-            if is_first_login and (time.time() - self.last_activity_time) >= 40:
-                 initial_session_active = False
-                 self.listening_enabled.clear() 
-                 
-            elif not is_first_login and not initial_session_active:
-                 self.listening_enabled.clear() 
-
-
-        if not self.stop_event.is_set() and not self.listening_enabled.is_set():
+        if not self.stop_event.is_set():
             print("▶ 대화 세션 시간 초과. 이제 핫워드 대기 상태로 전환합니다.")
+            
+            # 🚨 더 이상 대답하지 않도록 입 모양(Mouth) 감지 스위치를 확실하게 내립니다!
+            self.listening_enabled.clear() 
             
             self._flush_session_history()
 
             if self.emotion_queue:
                 self.emotion_queue.put("SLEEPY")
+
+        if not self.stop_event.is_set():
+            print("\n💤 모티가 잠들었습니다. '안녕 모티' 호출을 기다립니다... (종료: ESC)\n")       
 
         while not self.stop_event.is_set():
             if self.shared_state:
@@ -1207,7 +1211,6 @@ class PressToTalk:
 
             time.sleep(0.1)
 
-            print("▶ '안녕 모티' 호출(SLEEPY 상태에서)을 기다립니다... (종료: ESC)")
             try:
                 signal = self.hotword_queue.get(timeout=1.0)
                 
@@ -1215,6 +1218,10 @@ class PressToTalk:
                     print("💡 핫워드 감지! 대화 세션을 시작합니다.")
                     self.listening_enabled.set()
                     
+                    if self.last_logged_in_user and self.last_logged_in_user not in ["Unknown", "Wait_For_Name", "Thinking..."]:
+                        print(f"🧠 {self.last_logged_in_user}님의 장기 기억을 뇌에 다시 불러옵니다...")
+                        self.profile_manager.load_profile_for_chat(self.last_logged_in_user)
+
                     if self.emotion_queue: self.emotion_queue.put("WAKE")
                     self._speak_and_subtitle("네, 말씀하세요.")
                     
@@ -1231,6 +1238,8 @@ class PressToTalk:
                         self.listening_enabled.clear()
                         if self.emotion_queue:
                             self.emotion_queue.put("SLEEPY")
+
+                        print("\n💤 모티가 잠들었습니다. '안녕 모티' 호출을 기다립니다... (종료: ESC)\n")
                             
             except queue.Empty:
                 continue

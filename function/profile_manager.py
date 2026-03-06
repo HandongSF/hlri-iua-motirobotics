@@ -26,17 +26,13 @@ import google.generativeai as genai
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-# 순환 참조를 피하기 위해 타입 힌트만 임포트
 if TYPE_CHECKING:
     from gemini_api import PressToTalk
 
 from function.utils import _get_relative_time_str, _extract_text, SYSTEM_INSTRUCTION
 
-# ▼▼▼ [수정 1] 절대 경로 사용 (프로젝트 루트 기준) ▼▼▼
-# 이 파일(function/profile_manager.py)의 상위(function)의 상위(project_root) 경로를 구합니다.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROFILE_DB_FILE = os.path.join(BASE_DIR, "user_profiles.json")
-# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 class ProfileManager:
     """
@@ -191,8 +187,11 @@ class ProfileManager:
                 "2. 단순한 인사나 잡담은 무시합니다.\n"
                 "3. '새로운 사실 목록'은 항상 간결한 불렛 포인트(-)로 작성합니다.\n"
                 "4. [이번 세션 전체 대화]에서 추출할 새 사실이 없다면, [기존 사실]을 (삭제 규칙 적용 후) 그대로 출력합니다.\n"
-                "5. [!!기억 삭제 규칙!!] 1주일이 지난 사실은 삭제하되, 핵심 개인정보(이름, 생일 등)는 유지하세요.\n"
-                "6. [!!날짜/사실 분리 규칙!!] 영구적 사실은 날짜 없음, 특정 시점 사건은 날짜 포함, 상태는 기준일 포함.\n"
+                "5. [!!기억 삭제 규칙!!] 1주일이 지난 일상적인 잡담이나 일회성 상태는 삭제하되, 핵심 개인정보(이름, 생일, 직업, 성격, 취향, 게임, 운동, 좋아하는 것, 취미, 장기 목표 등)는 1주일이 지나도 절대 삭제하지 말고 영구적으로 유지하세요. (단, 8번 규칙에 의해 정보가 갱신되어 덮어쓰는 경우는 예외입니다.)\n"
+                "6. [!!날짜/사실 분리 규칙!!] 영구적 사실은 날짜를 적지 않고(예: - 전공: 미술), 특정 시점 사건이나 상태는 기준일을 포함하세요(예: - 수업 듣는 중 (상태, 2026년 03월 06일)).\n"
+                "7. [!!메아리 방지 규칙!!] 대화 로그에서 AI(모티)가 사용자의 과거 취향이나 기억을 단순히 '대답(회상)'해준 내용은 절대 새로운 정보로 추출하지 마세요. 오직 사용자가 '새롭게 직접 말한' 정보만 추출해야 합니다. 이미 [기존 사실]에 있는 내용을 재확인한 대화라면 기존 사실의 날짜를 오늘로 갱신하지 말고 예전 그대로 유지하세요.\n"
+                "8. [!!정보 갱신(덮어쓰기) 규칙!!] 사용자의 직업, 취향, 관심사, 목표 등 기존 [기존 사실]의 내용이 새롭게 변경되었거나 과거 사실과 충돌하는 경우(예: 학생 -> 취업), 옛날 정보와 새 정보를 중복해서 나열하지 말고 반드시 **가장 최신 정보 하나로 덮어쓰기(Overwrite)** 하세요.\n"
+                "9. [!!출력 규칙!!] 대답을 시작할 때 '네, 업데이트하겠습니다' 등의 인사말이나 부연 설명을 절대 하지 말고, 오직 업데이트된 불렛 포인트(-) 목록만 반환하세요.\n\n"
                 f"[기존 사실 ( {last_seen_str} 기준)]\n{old_summary}\n\n"
                 f"[이번 세션 전체 대화 ( {current_time_str} 에 종료됨)]\n"
                 f"{conversation_log}\n\n"
