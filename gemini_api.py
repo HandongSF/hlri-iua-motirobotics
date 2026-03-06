@@ -919,6 +919,9 @@ class PressToTalk:
             print("... TTS 대기 ...")
             self.tts.wait()
 
+            if self.emotion_queue and intent not in ["comfort", "hug", "shy"]:
+                self.emotion_queue.put("NEUTRAL")
+
             if user_text and speak_text_full:
                 log_entry = f"User: {user_text} | Moti: {speak_text_full}"
                 self.session_history.append(log_entry)
@@ -1049,16 +1052,36 @@ class PressToTalk:
                 # 1. 무언가 감지됨
                 if raw_name and raw_name not in ["Thinking...", None]:
                     
-                    # [디버깅] 1차 감지
-                    print(f"👀 1차 감지: '{raw_name}' -> 안정화 대기(0.8초)...")
-                    time.sleep(0.8) 
+                    # 👉 [수정] 모티의 인내심(Debounce) 로직: Unknown이더라도 진짜 이름이 뜰 때까지 최대 2.5초 기다림!
+                    print(f"👀 1차 감지: '{raw_name}'. 식별 안정화 대기 중...")
                     
-                    # 0.8초 후 최종 이름 다시 확인
-                    final_name = self.shared_state.get('detected_user')
-                    print(f"👀 2차 감지 결과: '{final_name}'")
+                    stabilize_timeout = 2.5  # 최대 기다리는 시간 (2.5초)
+                    elapsed = 0.0
+                    check_interval = 0.1
+                    final_name = raw_name
+                    
+                    while elapsed < stabilize_timeout:
+                        if self.stop_event.is_set(): break
+                        
+                        current_name = self.shared_state.get('detected_user')
+                        
+                        # 💡 [핵심] 기다리는 도중에 '진짜 이름'을 찾았다면, 더 안 기다리고 즉시 판단 완료!
+                        if current_name and current_name not in ["Unknown", "Thinking...", None]:
+                            final_name = current_name
+                            break
+                            
+                        # 얼굴이 카메라 밖으로 완전히 사라졌다면 취소
+                        if current_name is None:
+                            final_name = None
+                            break
+                            
+                        time.sleep(check_interval)
+                        elapsed += check_interval
+                    
+                    print(f"👀 2차(최종) 감지 결과: '{final_name}'")
 
                     if not final_name or final_name in ["Thinking...", None]:
-                        print("❌ 대기 중 얼굴을 놓쳤거나 인식 중입니다.")
+                        print("❌ 대기 중 얼굴을 놓쳤거나 여전히 인식 중입니다.")
                         continue 
                     
                     detected_name = final_name
@@ -1072,7 +1095,7 @@ class PressToTalk:
                                  # 이미 물어보고 대답 기다리는 중이면 패스
                                  pass
                              else:
-                                 print("🤖 Unknown 감지 -> 이름 질문 프로세스")
+                                 print("🤖 최종 Unknown 확정 -> 이름 질문 프로세스")
                                  self.raise_busy_signal()
                                  
                                  self._speak_and_subtitle("안녕하세요! 처음 뵙네요. 성함이 어떻게 되시나요?")
@@ -1136,8 +1159,6 @@ class PressToTalk:
                         self.listening_enabled.set() 
                         self.last_activity_time = time.time() 
                         
-                        # Unknown인 경우 루프를 깨지 않고 계속 감시(이름을 알게 될 때까지)할 수도 있지만,
-                        # 여기서는 일단 대화 모드로 넘겨서 사용자의 대답("내 이름은 OOO야")을 듣게 합니다.
                         is_first_login = True 
                         initial_session_active = False 
                         break 
