@@ -17,7 +17,7 @@ try:
     import screeninfo
 except ImportError:
     screeninfo = None
-
+    
 _IS_DARWIN = (platform.system() == "Darwin")
 
 PAN_SIGN  = int(os.getenv("PAN_SIGN",  "1"))
