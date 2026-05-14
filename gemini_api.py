@@ -693,17 +693,6 @@ class PressToTalk:
             if "ox 퀴즈" in low or "ox게임" in low or "ox 게임" in low: return {"intent": "ox_quiz", "normalized_text": text, "speakable_reply": ""}
             if any(w in low for w in ["가위바위보", "게임"]): return {"intent": "game", "normalized_text": text, "speakable_reply": ""}
             return {"intent": "chat", "normalized_text": text, "speakable_reply": ""}
-    
-    def _analyze_and_send_emotion(self, text: str):
-        if not self.emotion_queue or not text: return
-        low_text = text.lower()
-        if any(w in low_text for w in ["신나", "재밌", "좋아", "행복", "최고", "안녕", "반가", "환영", "어서오"]): self.emotion_queue.put("HAPPY")
-        elif any(w in low_text for w in ["놀라운", "놀랐", "깜짝", "세상에"]): self.emotion_queue.put("SURPRISED")
-        elif any(w in low_text for w in ["슬퍼", "우울", "힘들", "속상"]): self.emotion_queue.put("SAD")
-        elif any(w in low_text for w in ["화나", "짜증", "싫어", "최악"]): self.emotion_queue.put("ANGRY")
-        elif any(w in low_text for w in ["사랑", "다정", "따뜻", "고마워", "부끄","감사"]): self.emotion_queue.put("TENDER")
-        elif any(w in low_text for w in ["궁금", "생각", "글쎄", "흠.."]): self.emotion_queue.put("THINKING")
-        else: self.emotion_queue.put("NEUTRAL")
 
     @keep_awake
     def _transcribe_then_chat(self, wav_bytes: bytes):
@@ -745,6 +734,7 @@ class PressToTalk:
 
             current_time_str = datetime.now().strftime("%Y년 %m월 %d일 %p %I시 %M분").replace("AM", "오전").replace("PM", "오후")
 
+            # 🚨 [수정됨] 4. [EMOTION] 태그 강제 추가
             prompt = (
                 f"현재 시간: {current_time_str}\n"
                 f"현재 카메라 앞 사용자: {current_face_name}{situation_hint}\n"
@@ -752,7 +742,8 @@ class PressToTalk:
                 "1. [INTENT]의도[/INTENT] (목록: 'greeting', 'shy', 'hug', 'comfort', 'introduction', 'ox_quiz', 'game', 'joke', 'dance', 'stop', 'chat' 중 택 1)\n"
                 "2. [NAME]이름[/NAME] (의도가 'introduction'일 때만 사용자의 이름 2~4글자 추출. 그 외엔 생략)\n"
                 "3. [USER]사용자가 한 말[/USER]\n"
-                "4. 그 다음 줄부터: 모티의 다정한 대답 (동작 기능일 땐 생략)\n"
+                "4. [EMOTION]감정[/EMOTION] (대답을 할 때 지을 모티의 표정. 'HAPPY', 'SAD', 'ANGRY', 'SURPRISED', 'TENDER', 'NEUTRAL' 중 1개 필수 작성)\n"
+                "5. 그 다음 줄부터: 모티의 다정한 대답 (동작 기능일 땐 생략)\n"
                 "절대 마크다운(```)이나 다른 설명을 덧붙이지 마."
             )
 
@@ -775,11 +766,12 @@ class PressToTalk:
                 buffer += chunk.text
 
                 if not header_parsed:
-                    if "[/USER]" in buffer:
-                        # 👉 [보너스] re.DOTALL 옵션으로 LLM의 줄바꿈 변덕 완벽 방어
+                    # 🚨 [수정됨] 이제 LLM이 마지막으로 뱉는 태그는 [/EMOTION]입니다.
+                    if "[/EMOTION]" in buffer: 
                         intent_match = re.search(r'\[INTENT\](.*?)\[/INTENT\]', buffer, re.DOTALL)
                         user_match = re.search(r'\[USER\](.*?)\[/USER\]', buffer, re.DOTALL)
                         name_match = re.search(r'\[NAME\](.*?)\[/NAME\]', buffer, re.DOTALL)
+                        emotion_match = re.search(r'\[EMOTION\](.*?)\[/EMOTION\]', buffer, re.DOTALL) # 🚨 감정 추출 정규식 추가
                         
                         if intent_match: intent = intent_match.group(1).strip()
                         if user_match: user_text = user_match.group(1).strip()
@@ -790,7 +782,17 @@ class PressToTalk:
                         print(f"[{ts}] [Intent] {intent}")
                         if extracted_name: print(f"[{ts}] [Name] {extracted_name}")
                         
-                        self._analyze_and_send_emotion(user_text)
+                        # 🚨 [수정됨] 기존의 멍청한 단순 키워드 매칭 삭제!
+                        # 🚨 대신 Gemini가 선택한 감정을 바로 디스플레이로 쏩니다.
+                        if emotion_match:
+                            extracted_emotion = emotion_match.group(1).strip().upper()
+                            print(f"[{ts}] [Emotion] {extracted_emotion}")
+                            if self.emotion_queue:
+                                valid_emotions = ["HAPPY", "SAD", "ANGRY", "SURPRISED", "TENDER", "NEUTRAL"]
+                                if extracted_emotion in valid_emotions:
+                                    self.emotion_queue.put(extracted_emotion)
+                                else:
+                                    self.emotion_queue.put("NEUTRAL")
 
                         # 👉 [핵심 2] 행동(게임, 춤 등)을 요구했을 때 파이썬 코드로 애교 부리기
                         if intent in ["dance", "stop", "game", "ox_quiz", "joke"]:
@@ -812,22 +814,15 @@ class PressToTalk:
                             
                             # 👉 행동(게임/퀴즈/농담 등)이 끝난 직후에 본론으로 돌아옵니다!
                             if is_waiting_for_name and intent != "stop":
-
                                 self.raise_busy_signal()
                                 def follow_up_after_action():
-                                    try:# 동작 종류에 따라 대기 시간(초)을 다르게 설정합니다.
-                                        if intent == "dance":
-                                            time.sleep(42)
-
+                                    try:
+                                        if intent == "dance": time.sleep(42)
                                         self.last_activity_time = time.time()
-
                                         if self.emotion_queue: self.emotion_queue.put("NEUTRAL")
                                         self._speak_and_subtitle("그나저나, 제가 아직 성함을 못 들었어요. 이름이 어떻게 되시나요?")
-
                                     finally:
-                                        # 🚨 [핵심 3] 질문이 끝나면 "바쁨" 깃발을 뽑아서, 대답을 들을 수 있게 합니다.
                                         self.lower_busy_signal()
-
                                 threading.Thread(target=follow_up_after_action, daemon=True).start()
                             break
 
@@ -842,16 +837,12 @@ class PressToTalk:
                             else:
                                 self._speak_and_subtitle("그렇군요. 항상 옆에서 응원하고 있다는 걸 잊지 마세요. 힘내세요!")
                             
-                            # 👉 [추가] 위로가 끝난 뒤 다시 본론으로 돌아오기
                             if is_waiting_for_name:
                                 self._speak_and_subtitle("그나저나, 아직 성함을 못 들었는데 어떻게 되시나요?")
                             break
 
                         elif intent == "introduction":
-                            # 👉 [수정 3] Gemini가 똑똑하게 추출한 이름을 최우선으로 사용!
                             name = extracted_name if extracted_name else user_text.split(" ")[0]
-                            
-                            # (카메라가 이미 알고 있는 사람이면 그 이름 유지)
                             if current_face_name and current_face_name not in ["Unknown", "Thinking..."]:
                                 name = current_face_name
                                 
@@ -880,11 +871,13 @@ class PressToTalk:
                         elif intent == "shy" and callable(self.play_shy_cb): threading.Thread(target=self.play_shy_cb, daemon=True).start()
                         elif intent == "greeting" and callable(self.play_greeting_cb): threading.Thread(target=self.play_greeting_cb, daemon=True).start()
 
-                        # 헤더 파싱 후 대답 스트리밍 돌입
-                        buffer = buffer.split("[/USER]")[-1].lstrip()
+                        # 🚨 [수정됨] 헤더 파싱 후 버퍼에서 헤더(태그) 전체를 싹 지워버립니다. 그래야 TTS가 태그를 안 읽습니다!
+                        buffer = buffer.split("[/EMOTION]")[-1].lstrip()
                         header_parsed = True
-                    else:
-                        continue 
+                    
+                    elif len(buffer) > 400:
+                        # LLM이 태그를 까먹고 너무 길게 말하기 시작하면 방어용으로 파싱 종료
+                        header_parsed = True
 
                 if header_parsed:
                     while any(t in buffer for t in terminators):

@@ -99,10 +99,10 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
     # ============================================================
     #         ↓↓↓ [설정] 실시간 추적을 위해 가속도 끄기 ↓↓↓
     # ============================================================
-    print(f"🤖 추적 모터(Pan/Tilt) 설정 (반응속도 최우선)...")
+    print(f"🤖 추적 모터(Pan/Tilt) 설정 (부드러운 추적)...")
     with lock:
-        accel_value = 0 
-        velocity_value = 0 
+        accel_value = 20   # 🚨 0에서 20으로 변경 (서서히 출발/정지)
+        velocity_value = 60  # 🚨 0에서 60으로 변경 (안정적인 최대 속도)
         
         io.write4(pkt, port, C.PAN_ID, C.ADDR_PROFILE_VELOCITY, velocity_value)
         io.write4(pkt, port, C.TILT_ID, C.ADDR_PROFILE_VELOCITY, velocity_value)
@@ -132,7 +132,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
 
     last_mouth_open_time = 0.0
     is_speaking_state = False
-    MOUTH_OPEN_THRESHOLD = 0.08   
+    MOUTH_OPEN_THRESHOLD = 0.06  
     SPEAKING_TIMEOUT_SEC = 2.0 
     
     prev_time = 0
@@ -322,7 +322,7 @@ def face_tracker_worker(port: PortHandler, pkt: PacketHandler, lock: threading.L
                         # ============================================================
                         #        ↓↓↓ [설정] 최소 이동 임계값 조정 ↓↓↓
                         # ============================================================
-                        move_threshold = 1 
+                        move_threshold = 15 
                         
                         should_move_pan = abs(pan_pos - last_sent_pan) > move_threshold
                         should_move_tilt = abs(tilt_pos - last_sent_tilt) > move_threshold
