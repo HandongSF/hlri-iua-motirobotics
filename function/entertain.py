@@ -383,7 +383,7 @@ class EntertainmentHandler:
                 self.ptt.tts.wait()
 
                 # 4. 재도전 여부 확인 (OX 퀴즈 스타일)
-                self.ptt._speak_and_subtitle("계속 하시겠어요? (응/아니)")
+                self.ptt._speak_and_subtitle("계속 하시겠어요? 응 또는 아니 라고 말해주세요.")
                 self.ptt.tts.wait()
 
                 # 음성 인식 (VAD)
